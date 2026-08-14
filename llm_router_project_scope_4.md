@@ -294,12 +294,16 @@ and a manifest sufficient to reconstruct inference.
 
 ## Synchronized Deliverable
 
-`notebooks/04_decision_aligned_quality_router.ipynb` is the executable
-implementation of this document. Its contract cell repeats and asserts the
-schema version, v3 evidence requirements, model pool, split, fallback-relative
-safety definition, rank-4 LoRA configuration, loss weights, Platt calibration,
-threshold grid, latency blend grid, 2% predicted-speedup gate, 98% retention
-target, overhead-inclusive checkpoint rule, and fail-closed deployment guard.
+`notebooks/01_train_modernbert_router.ipynb` is the executable, didactic driver
+for this document. Reusable behavior lives in the installable `llm_router`
+package: model-specific inference under `src/llm_router/models` and evidence,
+training, calibration, selection, evaluation, and export helpers under
+`src/llm_router/utils`. `src/llm_router/config.py` is the synchronized source of
+truth for the schema version, v3 evidence requirements, model pool, split,
+fallback-relative safety definition, rank-4 LoRA configuration, loss weights,
+Platt calibration, threshold grid, latency blend grid, 2% predicted-speedup
+gate, 98% retention target, overhead-inclusive checkpoint rule, and fail-closed
+deployment guard.
 
 ## Out of Scope
 
