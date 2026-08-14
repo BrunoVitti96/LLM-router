@@ -52,6 +52,7 @@ def test_search_finds_quality_preserving_speedup():
     assert len(search) == 1
     assert best is not None
     assert best.quality_retention == 1.0
+    assert best.quality_retention_lcb == 1.0
     assert best.latency_reduction > 0
 
 

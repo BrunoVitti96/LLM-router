@@ -46,6 +46,7 @@ class RouterConfig:
     model_names: tuple[str, ...] = MODEL_NAMES
 
     minimum_quality_retention: float = 0.98
+    quality_confidence: float = 0.95
     quality_safety_epsilon: float = 0.0
     minimum_predicted_speedup: float = 0.02
     safety_definition: str = "candidate_quality >= fallback_quality - epsilon"
@@ -96,6 +97,7 @@ class RouterConfig:
         assert self.required_v3_schema_version == 3
         assert self.n_per_task == 300 and len(self.tasks) == 3
         assert self.minimum_quality_retention == 0.98
+        assert self.quality_confidence == 0.95
         assert self.lora_r == 4 and self.lora_alpha == 8
         assert self.lora_target_modules == "all-linear"
         assert self.max_input_tokens == 512
@@ -117,6 +119,7 @@ class RouterConfig:
             "safety_definition": self.safety_definition,
             "quality_safety_epsilon": self.quality_safety_epsilon,
             "minimum_quality_retention": self.minimum_quality_retention,
+            "quality_confidence": self.quality_confidence,
             "minimum_predicted_speedup": self.minimum_predicted_speedup,
             "encoder_repo": self.encoder_repo,
             "encoder_revision": self.encoder_revision,
@@ -153,7 +156,9 @@ class RouterConfig:
             "safety_threshold_grid": self.safety_threshold_grid,
             "latency_blend_grid": self.latency_blend_grid,
             "checkpoint_rule": "calibrated overhead-inclusive validation routing",
-            "deployment_guard": "disable unless retention >= 0.98 and net savings > 0",
+            "deployment_guard": (
+                "disable unless one-sided retention LCB >= 0.98 and net savings > 0"
+            ),
             "gpu": gpu,
             "dtype": dtype,
         }

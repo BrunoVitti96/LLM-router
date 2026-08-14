@@ -1,0 +1,23 @@
+{
+  "name": "example-typical-api-serving",
+  "as_of": "2026-08-14",
+  "network_s": 0.08,
+  "router_overhead_s": 0.004,
+  "notes": "Illustrative values only. Replace every price, TTFT, and throughput value with dated measurements or cited provider statistics.",
+  "models": {
+    "replace-with-fast-model-directory-name": {
+      "input_price_per_million": 0.3,
+      "output_price_per_million": 2.5,
+      "ttft_s": 0.35,
+      "output_tokens_per_second": 120.0,
+      "queue_s": 0.05
+    },
+    "replace-with-strong-model-directory-name": {
+      "input_price_per_million": 1.25,
+      "output_price_per_million": 10.0,
+      "ttft_s": 0.6,
+      "output_tokens_per_second": 65.0,
+      "queue_s": 0.08
+    }
+  }
+}

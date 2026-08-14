@@ -20,6 +20,9 @@ dependencies = [
   "transformers==4.53.1",
 ]
 
+[project.scripts]
+llm-router-benchmark = "llm_router.benchmark_cli:main"
+
 [project.optional-dependencies]
 notebook = ["ipywidgets>=8", "jupyterlab>=4"]
 quantization = ["bitsandbytes>=0.43"]

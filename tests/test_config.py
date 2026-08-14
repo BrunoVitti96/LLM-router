@@ -14,7 +14,9 @@ def test_synchronized_contract_constants():
 def test_contract_keeps_deployment_guard():
     contract = DEFAULT_CONFIG.contract("evidence", "gpu", "torch.float16")
     assert contract["minimum_quality_retention"] == 0.98
+    assert contract["quality_confidence"] == 0.95
     assert contract["minimum_predicted_speedup"] == 0.02
     assert contract["checkpoint_rule"] == (
         "calibrated overhead-inclusive validation routing"
     )
+    assert "retention LCB" in contract["deployment_guard"]

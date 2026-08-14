@@ -15,4 +15,5 @@ data/
 cache/
 reports_v4/
 artifacts_v4/
+reports_benchmark/
 hf_cache/

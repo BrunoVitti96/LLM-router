@@ -82,8 +82,9 @@ def evaluate_router(
 
     if selected_validation_row is None:
         warnings.warn(
-            "No validation configuration met 98% retention with positive net "
-            "latency reduction. Deployment is fallback-only.",
+            "No validation configuration met the 98% one-sided retention lower "
+            "confidence bound with positive net latency reduction. Deployment "
+            "is fallback-only.",
             stacklevel=2,
         )
         router_active = False
