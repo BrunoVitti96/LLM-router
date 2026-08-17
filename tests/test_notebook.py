@@ -35,6 +35,7 @@ def test_hybrid_poc_notebook_is_clean_didactic_and_syntactically_valid():
         "Final POC checklist",
         "git clone --branch develop",
         "hf_hub_download",
+        "archive_preview",
         "train_modernbert_hybrid_poc",
         "files.download",
     )
@@ -43,9 +44,11 @@ def test_hybrid_poc_notebook_is_clean_didactic_and_syntactically_valid():
     assert "probability_kind=\"oracle\"" not in full_text
     assert '-e \".[notebook]\"' not in full_text
     assert 'sys.path.insert(0, SOURCE_ROOT)' in full_text
+    assert 'module_name.startswith("llm_router.")' in full_text
     assert 'import llm_router' in full_text
     assert full_text.count("%pip install") == 1
     assert "replace-with" not in full_text
+    assert 'rglob("bench")' not in full_text
 
     for cell in code_cells:
         source = "".join(cell["source"])

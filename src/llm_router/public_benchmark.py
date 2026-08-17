@@ -174,6 +174,22 @@ class PublicBenchmarkResult:
 
 def _bench_root(root: str | Path) -> Path:
     root = Path(root)
+    conventional_roots = (root / "results" / "bench", root / "bench", root)
+    for candidate in conventional_roots:
+        if candidate.is_dir() and next(candidate.glob("*/*/*/*.json"), None):
+            return candidate
+
+    # Release archives have used different wrapper directories. Infer the
+    # benchmark root from the documented dataset/split/model/file.json shape
+    # instead of requiring a directory literally named ``bench``.
+    if root.is_dir():
+        for result_file in root.rglob("*.json"):
+            if len(result_file.parents) < 4:
+                continue
+            candidate = result_file.parents[3]
+            if next(candidate.glob("*/*/*/*.json"), None):
+                return candidate
+
     nested = root / "results" / "bench"
     return nested if nested.is_dir() else root
 

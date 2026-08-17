@@ -181,7 +181,8 @@ The notebook itself:
 - installs the package in non-editable mode, registers `src` in the live kernel,
   and verifies `llm_router` immediately (no runtime restart is needed);
 - downloads and extracts the official pre-collected LLMRouterBench archive from
-  Hugging Face;
+  Hugging Face, then discovers its root from the documented
+  `dataset/split/model/file.json` layout rather than a fixed wrapper name;
 - checks candidate names and analytical assumptions;
 - verifies completion-length leakage is absent;
 - creates dataset-disjoint train, validation, and sealed-test splits;
@@ -197,7 +198,8 @@ No CLI or separate candidate-inference notebook is required.
 
 If a previous Colab session left `/content/LLM_Router` behind, rerun the first
 setup cell. It fast-forwards `develop`, reinstalls the current checkout, and
-prints the exact `llm_router` path before the 1.28 GB benchmark download begins.
+clears stale in-memory router modules before printing the exact `llm_router` path
+and beginning the 1.28 GB benchmark download.
 The package resolver may warn about Colab's unused Gradio installation; that
 warning is unrelated to this notebook and does not stop router training.
 

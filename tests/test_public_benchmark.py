@@ -5,6 +5,7 @@ import numpy as np
 from llm_router.public_benchmark import (
     EconomicsScenario,
     ModelProfile,
+    benchmark_inventory,
     load_llmrouterbench,
     make_complete_panel,
     run_public_benchmark,
@@ -85,6 +86,27 @@ def test_load_and_simulate_llmrouterbench_release(tmp_path):
     panel = make_complete_panel(simulated, MODELS)
     assert panel.score.shape == (45, 3)
     assert panel.models == MODELS
+
+
+def test_inventory_discovers_a_release_under_unknown_wrapper_directories(tmp_path):
+    release_root = tmp_path / "download"
+    result_path = (
+        release_root
+        / "bench-release-2026"
+        / "payload"
+        / "math"
+        / "test"
+        / "fast"
+        / "result.json"
+    )
+    result_path.parent.mkdir(parents=True)
+    result_path.write_text(json.dumps({"records": []}), encoding="utf-8")
+
+    inventory = benchmark_inventory(release_root)
+
+    assert inventory[["dataset", "source_split", "model"]].to_dict("records") == [
+        {"dataset": "math", "source_split": "test", "model": "fast"}
+    ]
 
 
 def test_dataset_ood_split_is_disjoint(tmp_path):
