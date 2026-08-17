@@ -127,7 +127,7 @@ def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
     assert permissive.summary.loc["tfidf_safety_router", "resource_savings"] > 0
 
 
-def test_oracle_probabilities_drive_modernbert_policy_without_timing_inference(tmp_path):
+def test_safety_probabilities_drive_hybrid_policy_without_timing_inference(tmp_path):
     records = load_llmrouterbench(synthetic_release(tmp_path), models=MODELS)
     analytical = EconomicsScenario(
         name="analytic",
@@ -153,6 +153,7 @@ def test_oracle_probabilities_drive_modernbert_policy_without_timing_inference(t
     split = split_benchmark(panel, mode="random", seed=42)
     probabilities = np.full_like(panel.score, 0.01)
     probabilities[:, 0] = 0.98
+    probabilities[:, 2] = 1.0
     result = run_public_benchmark(
         panel,
         split,
@@ -160,8 +161,7 @@ def test_oracle_probabilities_drive_modernbert_policy_without_timing_inference(t
         minimum_quality_retention=0.5,
         confidence=0.8,
         routing_probabilities=probabilities,
-        probability_kind="oracle",
-        router_name="modernbert_oracle_router",
+        router_name="modernbert_hybrid_router",
     )
-    assert result.router_name == "modernbert_oracle_router"
-    assert "modernbert_oracle_router" in result.summary.index
+    assert result.router_name == "modernbert_hybrid_router"
+    assert "modernbert_hybrid_router" in result.summary.index

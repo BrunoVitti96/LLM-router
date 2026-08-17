@@ -572,30 +572,6 @@ def _route_from_probability(
     return np.where(eligible & cheap_enough, predicted_resource, np.inf).argmin(axis=1)
 
 
-def _route_from_oracle_probability(
-    probability: np.ndarray,
-    predicted_resource: np.ndarray,
-    threshold: float,
-    fallback_idx: int,
-    minimum_predicted_savings: float,
-) -> np.ndarray:
-    """Deploy an oracle-imitation classifier with a conservative fallback gate."""
-
-    proposed = probability.argmax(axis=1)
-    confidence = probability[np.arange(len(probability)), proposed]
-    fallback_resource = predicted_resource[:, fallback_idx]
-    proposed_resource = predicted_resource[np.arange(len(probability)), proposed]
-    accept = (
-        (proposed != fallback_idx)
-        & (confidence >= threshold)
-        & (
-            proposed_resource
-            <= fallback_resource * (1.0 - minimum_predicted_savings)
-        )
-    )
-    return np.where(accept, proposed, fallback_idx)
-
-
 def _dataset_lookup_choices(
     panel: BenchmarkPanel,
     split: BenchmarkSplit,
@@ -623,7 +599,6 @@ def run_public_benchmark(
     router_overhead_s: float = 0.0,
     seed: int = 42,
     routing_probabilities: np.ndarray | None = None,
-    probability_kind: str = "safety",
     router_name: str | None = None,
 ) -> PublicBenchmarkResult:
     """Run headroom analysis and a sealed-test routing experiment.
@@ -633,8 +608,6 @@ def run_public_benchmark(
     """
     if objective not in {"cost", "latency"}:
         raise ValueError("Objective must be 'cost' or 'latency'.")
-    if probability_kind not in {"safety", "oracle"}:
-        raise ValueError("probability_kind must be 'safety' or 'oracle'.")
     if not 0.5 < confidence < 1.0:
         raise ValueError("confidence must be between 0.5 and 1.0.")
     resource = panel.cost if objective == "cost" else panel.latency
@@ -642,8 +615,6 @@ def run_public_benchmark(
     fallback_idx = int(panel.score[split.train].mean(axis=0).argmax())
     fallback_model = panel.models[fallback_idx]
     if routing_probabilities is None:
-        if probability_kind != "safety":
-            raise ValueError("Oracle routing requires supplied ModernBERT probabilities.")
         probability, _ = _fit_safety_probabilities(
             panel, split, fallback_idx, quality_epsilon, seed
         )
@@ -658,11 +629,9 @@ def run_public_benchmark(
             or np.any(probability > 1)
         ):
             raise ValueError("Routing probabilities must be finite values in [0, 1].")
-        if probability_kind == "oracle" and not np.allclose(
-            probability.sum(axis=1), 1.0, atol=1e-4
-        ):
-            raise ValueError("Oracle class probabilities must sum to one per prompt.")
-        router_name = router_name or "modernbert_oracle_router"
+        if not np.allclose(probability[:, fallback_idx], 1.0, atol=1e-6):
+            raise ValueError("The fallback safety probability must always equal one.")
+        router_name = router_name or "modernbert_hybrid_router"
     # Cost requires a train-only predictor. Analytical latency is already known
     # from prompt size at route time, so no test outcomes or response lengths leak.
     resource_prediction = (
@@ -670,15 +639,9 @@ def run_public_benchmark(
         if objective == "latency"
         else _predicted_resource(panel, split, resource)
     )
-    route_function = (
-        _route_from_oracle_probability
-        if probability_kind == "oracle"
-        else _route_from_probability
-    )
-
     search_rows = []
     for threshold in threshold_grid:
-        all_choices = route_function(
+        all_choices = _route_from_probability(
             probability,
             resource_prediction,
             float(threshold),
@@ -711,7 +674,7 @@ def run_public_benchmark(
             ascending=[False, True, False],
         ).iloc[0]
         selected_threshold = float(best.threshold)
-        router_choices = route_function(
+        router_choices = _route_from_probability(
             probability,
             resource_prediction,
             selected_threshold,

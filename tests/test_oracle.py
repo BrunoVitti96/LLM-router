@@ -9,7 +9,12 @@ from llm_router.analytical_latency import (
     HardwareProfile,
     estimate_latency_matrix,
 )
-from llm_router.oracle import oracle_choices, oracle_routing_loss
+from llm_router.oracle import (
+    hybrid_routing_loss,
+    oracle_choices,
+    oracle_routing_loss,
+    replacement_safety_targets,
+)
 from llm_router.public_benchmark import BenchmarkPanel, BenchmarkSplit
 
 
@@ -52,9 +57,31 @@ def test_oracle_loss_prefers_fastest_quality_preserving_model():
     assert parts["quality_risk"] > 0
 
 
-def test_modernbert_poc_training_connects_oracle_loss_to_probabilities(monkeypatch):
+def test_hybrid_loss_trains_safety_and_keeps_oracle_auxiliary():
+    quality = torch.tensor([[1.0, 0.0, 1.0], [0.0, 1.0, 1.0]])
+    latency = torch.tensor([[1.0, 0.5, 5.0], [1.0, 2.0, 5.0]])
+    nonfallback = torch.tensor([0, 1])
+    safe_logits = torch.tensor([[8.0, -8.0], [-8.0, 8.0]])
+    unsafe_logits = -safe_logits
+    oracle_logits = torch.tensor([[8.0, -4.0, -4.0], [-4.0, 8.0, -4.0]])
+    safe_loss, parts = hybrid_routing_loss(
+        safe_logits, oracle_logits, quality, latency, 2, nonfallback
+    )
+    unsafe_loss, _ = hybrid_routing_loss(
+        unsafe_logits, oracle_logits, quality, latency, 2, nonfallback
+    )
+    assert safe_loss < unsafe_loss
+    assert parts["safety"] > 0
+    assert parts["oracle_auxiliary"] > 0
+    targets = replacement_safety_targets(
+        quality.numpy(), 2, nonfallback.numpy()
+    )
+    assert targets.tolist() == [[True, False], [False, True]]
+
+
+def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypatch):
     from llm_router import modernbert_poc
-    from llm_router.models.modernbert_router import OracleModernBERTRouter
+    from llm_router.models.modernbert_router import HybridModernBERTRouter
 
     class TinyBatch(dict):
         def to(self, device):
@@ -75,9 +102,11 @@ def test_modernbert_poc_training_connects_oracle_loss_to_probabilities(monkeypat
 
     monkeypatch.setattr(
         modernbert_poc,
-        "build_oracle_router",
-        lambda config, model_count: (
-            OracleModernBERTRouter(TinyEncoder(), 6, model_count),
+        "build_hybrid_router",
+        lambda config, nonfallback_count, model_count: (
+            HybridModernBERTRouter(
+                TinyEncoder(), 6, nonfallback_count, model_count
+            ),
             TinyTokenizer(),
         ),
     )
@@ -106,9 +135,15 @@ def test_modernbert_poc_training_connects_oracle_loss_to_probabilities(monkeypat
         validation_datasets=("b",),
         test_datasets=("c",),
     )
-    result = modernbert_poc.train_modernbert_oracle_poc(
+    result = modernbert_poc.train_modernbert_hybrid_poc(
         panel, split, epochs=1, batch_size=2, device="cpu"
     )
-    assert result.probabilities.shape == panel.score.shape
-    assert np.allclose(result.probabilities.sum(axis=1), 1.0)
+    assert result.safety_probabilities.shape == panel.score.shape
+    assert np.allclose(
+        result.safety_probabilities[:, result.fallback_index], 1.0
+    )
+    assert np.all(
+        (result.safety_probabilities >= 0)
+        & (result.safety_probabilities <= 1)
+    )
     assert len(result.history) == 1

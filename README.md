@@ -1,91 +1,116 @@
-# ModernBERT latency-aware LLM router POC
+# Hybrid ModernBERT latency-aware LLM router
 
-This repository trains
+This proof of concept trains
 [`nomic-ai/modernbert-embed-base`](https://huggingface.co/nomic-ai/modernbert-embed-base)
-with rank-4 LoRA to choose the lowest-latency LLM that preserves the quality of
-the strongest candidate. Candidate quality comes from a pre-collected public
-benchmark; candidate latency is **not measured by running every model on every
-prompt**. It is calculated from model size, architecture, precision, hardware
-assumptions, and prompt size.
+with rank-4 LoRA to predict whether each candidate LLM can preserve the quality
+of a strong fallback for a given prompt. A deterministic analytical estimator
+then chooses the lowest-latency candidate predicted safe.
 
-This is a proof of concept and a sensitivity-analysis tool. Analytical latency
-is a consistent routing proxy, not a production latency benchmark.
+ModernBERT does **not** predict latency and does **not** directly predict the
+final model. Candidate latency comes from model size, autoregressive versus
+diffusion architecture, precision, hardware assumptions, and prompt size. No
+candidate LLM is loaded or timed to build latency labels.
 
-## What the router does
+This is a feasibility and sensitivity-analysis experiment, not a claim of
+measured production latency.
+
+## Routing logic
 
 ```mermaid
 flowchart LR
-    P["Prompt + dataset metadata"] --> T["Prompt-token count"]
-    C["Model profiles: parameters, AR/diffusion, precision"] --> L["Analytical latency matrix"]
-    H["Hardware and output-length assumptions"] --> L
-    T --> L
-    Q["Pre-collected quality scores"] --> O["Hindsight oracle"]
-    L --> O
-    P --> M["ModernBERT + rank-4 LoRA"]
-    O -. "oracle loss" .-> M
-    M --> R["Per-model routing probabilities"]
-    R --> G{"Validation-selected confidence and speed gate"}
-    L --> G
-    G -->|"confident, faster"| A["Selected alternative"]
-    G -->|"otherwise"| F["Strongest fallback"]
-    A --> V{"95% quality-retention LCB >= target and savings > 0?"}
-    F --> V
-    V -->|"yes"| D["Activate router"]
-    V -->|"no"| X["Fail closed to fallback"]
+    P["Prompt + metadata"] --> M["ModernBERT + rank-4 LoRA"]
+    M --> S["Per-candidate P(preserves fallback quality)"]
+    P --> N["Prompt-token count"]
+    C["Parameters, precision, AR/diffusion profile"] --> L["Analytical latency per candidate"]
+    H["Hardware + output-length assumptions"] --> L
+    N --> L
+    S --> E{"Safety probability ≥ threshold?"}
+    L --> E
+    E -->|"Eligible alternatives"| A["Choose lowest analytical latency"]
+    E -->|"None"| F["Choose strongest fallback"]
+    A --> G{"Validation quality LCB ≥ 98% and net savings > 0?"}
+    F --> G
+    G -->|"Pass"| D["Activate router"]
+    G -->|"Fail"| X["Fallback-only policy"]
 ```
 
-The only model executed at routing time is the small ModernBERT router. The
-candidate LLM is executed only after it is selected. Offline candidate outputs
-are still required to supervise and evaluate quality; LLMRouterBench supplies
-those without requiring this POC to regenerate them.
+At deployment, only the safety head is used. The training-only oracle head helps
+ModernBERT learn decision-relevant representations but never chooses a model.
 
-## Analytical latency model
+## Deployment objective
 
-For active parameter count \(P_m\), prompt tokens \(n\), effective compute \(F\),
-memory bandwidth \(B\), and weight precision \(b\):
-
-$$
-t_{compute/token}=\frac{2P_m}{F}, \qquad
-t_{memory/pass}=\frac{P_m b/8}{B}.
-$$
-
-Prefill is approximated as \(n\,t_{compute/token}\). Autoregressive decoding
-performs one sequential pass per expected output token. A diffusion model
-performs `diffusion_steps` passes per output block. The expected output length is
-a bounded function of prompt tokens, fixed before looking at any candidate
-response:
+Let (f) be the strongest model on the training split, let
+(widehat P_m(safe\mid x)) be ModernBERT's fallback-relative safety estimate,
+and let (widehat L_m(x)) be analytical latency. The per-prompt selector is:
 
 $$
-\widehat n_{out}=\operatorname{clip}(a+c n,n_{min},n_{max}).
+\pi(x)=\arg\min_m \widehat L_m(x)
 $$
 
-Therefore, changing a benchmark row's realized completion length does not
-change its analytical latency. All assumptions are exported with the report so
-they can be varied in sensitivity runs. The implementation is in
-`src/llm_router/analytical_latency.py`.
-
-## Oracle target and oracle loss
-
-Let \(f\) be the strongest model on the training split, \(Q_m(x)\) the observed
-quality, and \(\widehat L_m(x)\) analytical latency. The hindsight oracle is:
+subject to:
 
 $$
-o(x)=\arg\min_m \widehat L_m(x)
+\widehat P_m(safe\mid x)\ge\tau,
+\qquad
+\widehat L_m(x)\le(1-\delta)\widehat L_f(x).
+$$
+
+The fallback is always eligible. The default minimum predicted speedup is
+(delta=0.02). Validation selects (	au), and the router is activated only if:
+
+$$
+\operatorname{LCB}_{95\%}\left(
+\frac{\mathbb E[Q_{\pi(x)}]}{\mathbb E[Q_f]}
+\right)\ge0.98
+\quad\text{and}\quad
+1-\frac{\mathbb E[\widehat L_{\pi(x)}+L_{router}]}{
+\mathbb E[\widehat L_f]}>0.
+$$
+
+This separates the two responsibilities cleanly: ModernBERT estimates quality
+safety; the analytical model supplies latency; a deterministic constrained
+optimizer makes the final choice.
+
+## Training targets and loss
+
+Pre-collected benchmark outcomes provide quality supervision. For every prompt
+and non-fallback candidate:
+
+$$
+y_m(x)=\mathbf 1[Q_m(x)\ge Q_f(x)-\epsilon_q].
+$$
+
+The deployed safety head emits independent logits (s_m) and uses binary
+cross-entropy:
+
+$$
+\mathcal L_{safety}=
+\frac{1}{N(M-1)}\sum_{x,m}
+BCEWithLogits(s_m(x),y_m(x)).
+$$
+
+### What the oracle means
+
+The hindsight oracle is available only during training and retrospective
+evaluation. Because it can see all recorded quality outcomes, it chooses:
+
+$$
+o(x)=\arg\min_m\widehat L_m(x)
 \quad\text{subject to}\quad
 Q_m(x)\ge Q_f(x)-\epsilon_q.
 $$
 
-The fallback is always eligible. ModernBERT emits one logit \(z_m(x)\) per
-candidate. Its loss has three parts:
+An auxiliary head produces oracle-class logits (z), with
+(p=softmax(z)). Its decision-alignment loss is:
 
 $$
 \mathcal L_{oracle}=
-\underbrace{(1+g_o)\,CE(z,o)}_{\text{imitate the best safe route}}
-+4\underbrace{\sum_m p_m d_m}_{\text{expected quality risk}}
-+\underbrace{\sum_m p_m r_m}_{\text{expected latency regret}},
+(1+g_o)CE(z,o)
++4\sum_m p_m d_m
++\sum_m p_m r_m,
 $$
 
-where \(p=\operatorname{softmax}(z)\),
+where:
 
 $$
 g_o=\max\left(0,\frac{\widehat L_f-\widehat L_o}{\widehat L_f}\right),
@@ -95,112 +120,132 @@ d_m=\max(0,Q_f-Q_m-\epsilon_q),
 r_m=\max\left(0,\frac{\widehat L_m-\widehat L_o}{\widehat L_f}\right).
 $$
 
-In plain language:
+- Cross-entropy teaches the ideal hindsight decision and emphasizes larger safe
+  opportunities.
+- Expected quality risk penalizes probability placed on quality-losing models.
+- Latency regret penalizes probability placed on models slower than the oracle.
 
-- cross-entropy teaches the exact hindsight choice and emphasizes prompts with
-  a large safe speed opportunity;
-- expected quality risk heavily penalizes probability placed on a model that
-  loses to the fallback;
-- latency regret penalizes probability placed on a safe but unnecessarily slow
-  model.
+The complete loss is:
 
-This loss does not by itself make a deployment claim. Validation selects the
-confidence threshold, requires predicted latency savings, and activates the
-router only when the one-sided quality-retention lower confidence bound meets
-the configured target and net latency savings remain positive. The loss is in
-`src/llm_router/oracle.py`.
+$$
+\boxed{
+\mathcal L_{train}=
+1.0\,\mathcal L_{safety}
++0.25\,\mathcal L_{oracle}
+}
+$$
 
-## Run the POC
+The oracle term is auxiliary. Changing hardware assumptions changes analytical
+selection without requiring the deployed safety target to be redefined.
 
-Install the project:
+## Analytical latency
+
+For active parameter count (P_m), prompt tokens (n), effective compute (F),
+memory bandwidth (B), and weight precision (b):
+
+$$
+t_{compute/token}=\frac{2P_m}{F},
+\qquad
+t_{memory/pass}=\frac{P_m b/8}{B}.
+$$
+
+Prefill is approximated as (n\,t_{compute/token}). Autoregressive decoding
+uses one sequential pass per expected output token. Diffusion decoding uses the
+declared denoising steps per generated block. Expected output length is derived
+only from prompt size:
+
+$$
+\widehat n_{out}=clip(a+cn,n_{min},n_{max}).
+$$
+
+Realized completion length is deliberately excluded. The notebook contains an
+assertion proving that changing every recorded completion length does not change
+analytical latency.
+
+## Train entirely in Google Colab
+
+Open the recommended notebook directly:
+
+[Open the hybrid ModernBERT notebook in Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/develop/notebooks/02_train_modernbert_hybrid_poc.ipynb)
+
+Then:
+
+1. Select **Runtime → Change runtime type → GPU**.
+2. Run the notebook from top to bottom.
+3. In the clearly marked configuration cell, replace the model-profile
+   placeholders with exact model directory names shown by the inventory cell and
+   their sourced parameter/architecture facts.
+
+The notebook itself:
+
+- clones the `develop` branch;
+- installs the package;
+- downloads and extracts the official pre-collected LLMRouterBench archive from
+  Hugging Face;
+- checks candidate names and analytical assumptions;
+- verifies completion-length leakage is absent;
+- creates dataset-disjoint train, validation, and sealed-test splits;
+- shows validation-only oracle headroom before training;
+- trains ModernBERT with LoRA;
+- selects the safety threshold using validation only;
+- opens the test split after policy freeze; and
+- exports reports, the LoRA adapter, both heads, tokenizer, and manifest; then
+- packages everything as a ZIP and starts a browser download before the Colab
+  runtime is discarded.
+
+No CLI or separate candidate-inference notebook is required.
+
+## Command-line equivalent
+
+The same hybrid workflow is available after installing the project:
 
 ```bash
 pip install -e ".[dev]"
-```
 
-### Recommended: didactic Jupyter notebook
-
-Open `notebooks/02_train_modernbert_oracle_poc.ipynb` from the repository root.
-It walks through inventory inspection, model-profile assumptions, the
-completion-length leakage check, dataset-disjoint splitting, oracle headroom,
-ModernBERT training, validation policy selection, sealed-test interpretation,
-and artifact export. Every code cell is clean and intended to be run in order.
-
-The older `01_train_modernbert_router.ipynb` is retained only to reproduce the
-historical measured-latency experiment.
-
-### Command-line equivalent
-
-Download and extract
-[LLMRouterBench](https://github.com/ynulihao/LLMRouterBench), then inspect its
-dataset/model directory names:
-
-```bash
-llm-router-benchmark --data-root /path/to/LLMRouterBench --list-inventory
-```
-
-Copy `configs/benchmark_scenario.example.json`. Replace the placeholder model
-keys with chosen LLMRouterBench model directories and verify each model-card
-assumption: total/active parameters, autoregressive or diffusion architecture,
-weight precision, and diffusion block settings. The hardware constants are POC
-assumptions; run several scenarios rather than presenting one as measured fact.
-
-Train ModernBERT and evaluate on a dataset-disjoint sealed test:
-
-```bash
 llm-router-benchmark \
   --data-root /path/to/LLMRouterBench \
   --scenario configs/my_analytical_scenario.json \
   --models model-a,model-b,model-c \
   --objective latency \
   --split-mode dataset_ood \
-  --router modernbert-oracle \
+  --router modernbert-hybrid \
   --epochs 5 \
-  --output-dir reports_benchmark/modernbert_latency_ood
+  --output-dir reports_benchmark/modernbert_hybrid_ood
 ```
 
-The output contains strategy comparisons, threshold search, sealed-test
-decisions, the exact analytical scenario, and a reconstructable ModernBERT LoRA
-adapter plus routing head. `--router tfidf` remains available only as a cheap
-diagnostic baseline.
+`--router tfidf` remains available as a cheap diagnostic baseline.
 
-## What counts as proof
+## What counts as a successful POC
 
-The POC establishes feasibility when all of the following hold on the sealed
-test after the validation policy is frozen:
-
-- the outcome-aware oracle has material latency headroom;
-- ModernBERT routes a non-trivial share of prompts away from the fallback;
-- the one-sided 95% quality-retention lower bound is at least the chosen target
-  (98% by default);
-- analytical net latency savings are positive after assumed router overhead;
-- the conclusion remains stable across reasonable hardware, output-length, and
+- The outcome-aware oracle demonstrates material latency headroom.
+- ModernBERT routes a non-trivial fraction away from the fallback.
+- The sealed-test one-sided 95% quality-retention lower bound reaches 98%.
+- Net analytical latency savings remain positive after router overhead.
+- The result remains stable across reasonable hardware, response-length, and
   diffusion-step sensitivity scenarios.
 
-It does **not** prove production latency. A later production phase should
-calibrate the analytical constants with a small number of aggregate hardware
-measurements, not run every candidate on every prompt.
+These findings do not prove production latency. A production phase should
+calibrate analytical constants using a small aggregate hardware study rather
+than timing every candidate on every prompt.
 
 ## Repository layout
 
 ```text
+notebooks/
+├── 01_train_modernbert_router.ipynb       # historical measured-latency run
+└── 02_train_modernbert_hybrid_poc.ipynb   # recommended Colab workflow
+
 src/llm_router/
 ├── analytical_latency.py       # measurement-free latency equations
-├── oracle.py                   # oracle targets and differentiable loss
-├── modernbert_poc.py           # ModernBERT training and artifact export
-├── public_benchmark.py         # benchmark ingestion, policy selection, reports
-├── benchmark_cli.py            # executable POC
-└── models/modernbert_router.py # ModernBERT + LoRA architectures
-
-notebooks/
-├── 01_train_modernbert_router.ipynb      # historical measured-latency run
-└── 02_train_modernbert_oracle_poc.ipynb  # recommended didactic POC
+├── oracle.py                   # safety targets and auxiliary oracle loss
+├── modernbert_poc.py           # hybrid training and artifact export
+├── public_benchmark.py         # policy selection and sealed evaluation
+├── benchmark_cli.py            # optional command-line driver
+└── models/modernbert_router.py # ModernBERT + LoRA heads
 ```
 
-The earlier measured-latency v4 notebook remains for comparison, but it is no
-longer the recommended path for this POC because it learns per-prompt measured
-latency. The primary entry point is now `llm-router-benchmark` with
-`--router modernbert-oracle` and an analytical scenario.
+The historical v4 notebook and scope document remain only for measured-latency
+reproduction. They are not the recommended POC path.
 
 ## Development checks
 

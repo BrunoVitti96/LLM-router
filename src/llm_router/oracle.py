@@ -25,6 +25,22 @@ def oracle_choices(
     return np.where(eligible, analytical_latency, np.inf).argmin(axis=1)
 
 
+def replacement_safety_targets(
+    quality: np.ndarray,
+    fallback_index: int,
+    nonfallback_indices: np.ndarray,
+    quality_epsilon: float = 0.0,
+) -> np.ndarray:
+    """Return whether each alternative preserves fallback-relative quality."""
+
+    quality = np.asarray(quality, dtype=float)
+    nonfallback_indices = np.asarray(nonfallback_indices, dtype=int)
+    if quality.ndim != 2:
+        raise ValueError("Quality must be a [prompt, model] array.")
+    fallback_quality = quality[:, fallback_index, None]
+    return quality[:, nonfallback_indices] >= fallback_quality - quality_epsilon
+
+
 def oracle_routing_loss(
     logits: torch.Tensor,
     quality: torch.Tensor,
@@ -80,4 +96,54 @@ def oracle_routing_loss(
         "imitation": imitation,
         "quality_risk": quality_risk,
         "latency_regret": latency_regret_loss,
+    }
+
+
+def hybrid_routing_loss(
+    safety_logits: torch.Tensor,
+    oracle_logits: torch.Tensor,
+    quality: torch.Tensor,
+    analytical_latency: torch.Tensor,
+    fallback_index: int,
+    nonfallback_indices: torch.Tensor,
+    *,
+    quality_epsilon: float = 0.0,
+    safety_loss_weight: float = 1.0,
+    oracle_auxiliary_weight: float = 0.25,
+) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
+    """Optimize deployable safety estimates plus auxiliary oracle imitation.
+
+    The safety head is the only head used by the deployed selector.  The oracle
+    head regularizes the shared ModernBERT representation toward the ideal
+    latency-aware decision, without entangling deployment with a fixed hardware
+    scenario or candidate ranking.
+    """
+
+    if safety_logits.shape != (
+        len(quality),
+        len(nonfallback_indices),
+    ):
+        raise ValueError("Safety logits do not match the non-fallback model count.")
+    fallback_quality = quality[:, fallback_index : fallback_index + 1]
+    safety_target = (
+        quality[:, nonfallback_indices] >= fallback_quality - quality_epsilon
+    ).float()
+    safety_loss = F.binary_cross_entropy_with_logits(
+        safety_logits.float(), safety_target
+    )
+    oracle_loss, oracle_parts = oracle_routing_loss(
+        oracle_logits,
+        quality,
+        analytical_latency,
+        fallback_index,
+        quality_epsilon=quality_epsilon,
+    )
+    total = (
+        safety_loss_weight * safety_loss
+        + oracle_auxiliary_weight * oracle_loss
+    )
+    return total, {
+        "safety": safety_loss,
+        "oracle_auxiliary": oracle_loss,
+        **{f"oracle_{name}": value for name, value in oracle_parts.items()},
     }

@@ -38,22 +38,31 @@ class DecisionAlignedRouter(torch.nn.Module):
         }
 
 
-class OracleModernBERTRouter(torch.nn.Module):
-    """ModernBERT encoder whose logits imitate the hindsight routing oracle."""
+class HybridModernBERTRouter(torch.nn.Module):
+    """Predict replacement safety; imitate the oracle through an auxiliary head."""
 
     def __init__(
-        self, encoder: torch.nn.Module, hidden_size: int, model_count: int
+        self,
+        encoder: torch.nn.Module,
+        hidden_size: int,
+        nonfallback_count: int,
+        model_count: int,
     ) -> None:
         super().__init__()
         self.encoder = encoder
         self.dropout = torch.nn.Dropout(0.10)
-        self.routing_head = torch.nn.Linear(hidden_size, model_count)
+        self.safety_head = torch.nn.Linear(hidden_size, nonfallback_count)
+        self.oracle_head = torch.nn.Linear(hidden_size, model_count)
 
     def forward(self, **inputs: torch.Tensor) -> dict[str, torch.Tensor]:
         hidden = self.encoder(**inputs).last_hidden_state
         mask = inputs["attention_mask"].unsqueeze(-1).to(hidden.dtype)
         pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
-        return {"routing_logits": self.routing_head(self.dropout(pooled))}
+        pooled = self.dropout(pooled)
+        return {
+            "safety_logits": self.safety_head(pooled),
+            "oracle_logits": self.oracle_head(pooled),
+        }
 
 
 def build_trainable_router(
@@ -89,11 +98,12 @@ def build_trainable_router(
     return model, tokenizer
 
 
-def build_oracle_router(
+def build_hybrid_router(
     config: RouterConfig,
+    nonfallback_count: int,
     model_count: int,
-) -> tuple[OracleModernBERTRouter, AutoTokenizer]:
-    """Build the rank-4 LoRA ModernBERT used by the public-data POC."""
+) -> tuple[HybridModernBERTRouter, AutoTokenizer]:
+    """Build the rank-4 LoRA ModernBERT used by the hybrid routing POC."""
 
     tokenizer = AutoTokenizer.from_pretrained(
         config.encoder_repo, revision=config.encoder_revision
@@ -114,4 +124,9 @@ def build_oracle_router(
         bias="none",
     )
     encoder = get_peft_model(base_encoder, lora_config)
-    return OracleModernBERTRouter(encoder, hidden_size, model_count), tokenizer
+    return (
+        HybridModernBERTRouter(
+            encoder, hidden_size, nonfallback_count, model_count
+        ),
+        tokenizer,
+    )

@@ -26,7 +26,7 @@ def _comma_list(value: str | None) -> list[str] | None:
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description=(
-            "Train a ModernBERT oracle router and evaluate routing headroom on an "
+            "Train a hybrid ModernBERT safety router and evaluate headroom on an "
             "extracted LLMRouterBench result bundle."
         )
     )
@@ -40,7 +40,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--models", help="Comma-separated model directory names.")
     parser.add_argument("--datasets", help="Optional comma-separated datasets.")
     parser.add_argument(
-        "--objective", choices=("cost", "latency"), default="cost"
+        "--objective", choices=("cost", "latency"), default="latency"
     )
     parser.add_argument(
         "--split-mode", choices=("random", "dataset_ood"), default="dataset_ood"
@@ -50,8 +50,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument(
         "--router",
-        choices=("modernbert-oracle", "tfidf"),
-        default="modernbert-oracle",
+        choices=("modernbert-hybrid", "tfidf"),
+        default="modernbert-hybrid",
         help="ModernBERT is the POC router; TF-IDF is a cheap diagnostic baseline.",
     )
     parser.add_argument("--epochs", type=int, default=5)
@@ -89,13 +89,12 @@ def main(argv: list[str] | None = None) -> int:
     panel = make_complete_panel(simulated, models=models)
     split = split_benchmark(panel, mode=args.split_mode, seed=args.seed)
     probabilities = None
-    probability_kind = "safety"
     router_name = "tfidf_safety_router"
     training = None
-    if args.router == "modernbert-oracle":
-        from llm_router.modernbert_poc import train_modernbert_oracle_poc
+    if args.router == "modernbert-hybrid":
+        from llm_router.modernbert_poc import train_modernbert_hybrid_poc
 
-        training = train_modernbert_oracle_poc(
+        training = train_modernbert_hybrid_poc(
             panel,
             split,
             epochs=args.epochs,
@@ -103,9 +102,8 @@ def main(argv: list[str] | None = None) -> int:
             learning_rate=args.learning_rate,
             device=args.device,
         )
-        probabilities = training.probabilities
-        probability_kind = "oracle"
-        router_name = "modernbert_oracle_router"
+        probabilities = training.safety_probabilities
+        router_name = "modernbert_hybrid_router"
     result = run_public_benchmark(
         panel,
         split,
@@ -115,14 +113,13 @@ def main(argv: list[str] | None = None) -> int:
         router_overhead_s=scenario.router_overhead_s,
         seed=args.seed,
         routing_probabilities=probabilities,
-        probability_kind=probability_kind,
         router_name=router_name,
     )
     output_dir = export_public_benchmark(result, scenario, Path(args.output_dir))
     if training is not None:
-        from llm_router.modernbert_poc import export_modernbert_oracle_poc
+        from llm_router.modernbert_poc import export_modernbert_hybrid_poc
 
-        export_modernbert_oracle_poc(
+        export_modernbert_hybrid_poc(
             training,
             panel.models,
             output_dir / "modernbert_router",
