@@ -38,6 +38,24 @@ class DecisionAlignedRouter(torch.nn.Module):
         }
 
 
+class OracleModernBERTRouter(torch.nn.Module):
+    """ModernBERT encoder whose logits imitate the hindsight routing oracle."""
+
+    def __init__(
+        self, encoder: torch.nn.Module, hidden_size: int, model_count: int
+    ) -> None:
+        super().__init__()
+        self.encoder = encoder
+        self.dropout = torch.nn.Dropout(0.10)
+        self.routing_head = torch.nn.Linear(hidden_size, model_count)
+
+    def forward(self, **inputs: torch.Tensor) -> dict[str, torch.Tensor]:
+        hidden = self.encoder(**inputs).last_hidden_state
+        mask = inputs["attention_mask"].unsqueeze(-1).to(hidden.dtype)
+        pooled = (hidden * mask).sum(dim=1) / mask.sum(dim=1).clamp_min(1.0)
+        return {"routing_logits": self.routing_head(self.dropout(pooled))}
+
+
 def build_trainable_router(
     config: RouterConfig,
     nonfallback_count: int,
@@ -69,3 +87,31 @@ def build_trainable_router(
         model_count=model_count,
     )
     return model, tokenizer
+
+
+def build_oracle_router(
+    config: RouterConfig,
+    model_count: int,
+) -> tuple[OracleModernBERTRouter, AutoTokenizer]:
+    """Build the rank-4 LoRA ModernBERT used by the public-data POC."""
+
+    tokenizer = AutoTokenizer.from_pretrained(
+        config.encoder_repo, revision=config.encoder_revision
+    )
+    base_encoder = AutoModel.from_pretrained(
+        config.encoder_repo,
+        revision=config.encoder_revision,
+        attn_implementation="sdpa",
+    )
+    hidden_size = int(base_encoder.config.hidden_size)
+    lora_config = LoraConfig(
+        task_type=TaskType.FEATURE_EXTRACTION,
+        inference_mode=False,
+        r=config.lora_r,
+        lora_alpha=config.lora_alpha,
+        lora_dropout=config.lora_dropout,
+        target_modules=config.lora_target_modules,
+        bias="none",
+    )
+    encoder = get_peft_model(base_encoder, lora_config)
+    return OracleModernBERTRouter(encoder, hidden_size, model_count), tokenizer

@@ -1,5 +1,11 @@
 # Decision-Aligned Quality-Preserving LLM Router
 
+> Historical measured-latency experiment. The recommended POC is now the
+> ModernBERT oracle-imitation workflow documented in `README.md`: it uses
+> pre-collected quality outcomes and analytical latency derived from model size,
+> architecture, precision, hardware assumptions, and prompt size. This v4 scope
+> is retained only to reproduce the earlier measured-latency comparison.
+
 ## Goal
 
 Build a prompt-only router that reuses the completed v3 candidate measurements

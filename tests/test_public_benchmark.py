@@ -12,7 +12,6 @@ from llm_router.public_benchmark import (
     split_benchmark,
 )
 
-
 MODELS = ("fast", "specialist", "strong")
 
 
@@ -61,6 +60,7 @@ def scenario():
     return EconomicsScenario(
         name="test",
         as_of="2026-08-14",
+        latency_method="throughput",
         network_s=0.1,
         router_overhead_s=0.01,
         profiles=(
@@ -125,3 +125,43 @@ def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
     assert permissive.router_active
     assert permissive.selected_threshold <= 0.95
     assert permissive.summary.loc["tfidf_safety_router", "resource_savings"] > 0
+
+
+def test_oracle_probabilities_drive_modernbert_policy_without_timing_inference(tmp_path):
+    records = load_llmrouterbench(synthetic_release(tmp_path), models=MODELS)
+    analytical = EconomicsScenario(
+        name="analytic",
+        as_of="2026-08-17",
+        latency_method="analytical",
+        profiles=(
+            ModelProfile("fast", 0.1, 0.2, parameters_billions=1.0, architecture="autoregressive"),
+            ModelProfile("specialist", 0.2, 0.4, parameters_billions=2.0, architecture="diffusion", diffusion_steps=4, diffusion_block_size=8),
+            ModelProfile("strong", 1.0, 2.0, parameters_billions=7.0, architecture="autoregressive"),
+        ),
+    )
+    simulated = simulate_economics(records, analytical)
+    assert simulated.latency_source.eq("analytical").all()
+    # Changing realized completion length cannot change analytical latency.
+    changed = records.copy()
+    changed["completion_tokens"] = changed.completion_tokens * 100
+    changed_simulated = simulate_economics(changed, analytical)
+    assert np.allclose(
+        simulated.simulated_latency_s, changed_simulated.simulated_latency_s
+    )
+
+    panel = make_complete_panel(simulated, MODELS)
+    split = split_benchmark(panel, mode="random", seed=42)
+    probabilities = np.full_like(panel.score, 0.01)
+    probabilities[:, 0] = 0.98
+    result = run_public_benchmark(
+        panel,
+        split,
+        objective="latency",
+        minimum_quality_retention=0.5,
+        confidence=0.8,
+        routing_probabilities=probabilities,
+        probability_kind="oracle",
+        router_name="modernbert_oracle_router",
+    )
+    assert result.router_name == "modernbert_oracle_router"
+    assert "modernbert_oracle_router" in result.summary.index

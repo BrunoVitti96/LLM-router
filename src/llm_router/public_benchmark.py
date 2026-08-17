@@ -8,16 +8,22 @@ from __future__ import annotations
 
 import json
 import warnings
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from statistics import NormalDist
-from typing import Iterable, Sequence
 
 import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
 
+from llm_router.analytical_latency import (
+    AnalyticalModelProfile,
+    HardwareProfile,
+    OutputLengthPolicy,
+    estimate_latency_seconds,
+)
 
 REQUIRED_RECORD_COLUMNS = {
     "example_id",
@@ -40,6 +46,13 @@ class ModelProfile:
     ttft_s: float | None = None
     output_tokens_per_second: float | None = None
     queue_s: float = 0.0
+    parameters_billions: float | None = None
+    active_parameters_billions: float | None = None
+    architecture: str | None = None
+    weight_bits: int = 16
+    diffusion_steps: int = 1
+    diffusion_block_size: int = 1
+    architecture_factor: float = 1.0
 
     def validate(self) -> None:
         numeric = (
@@ -48,11 +61,25 @@ class ModelProfile:
             self.ttft_s,
             self.output_tokens_per_second,
             self.queue_s,
+            self.parameters_billions,
+            self.active_parameters_billions,
+            self.architecture_factor,
         )
         if any(value is not None and value < 0 for value in numeric):
             raise ValueError(f"Negative economics value in profile {self.name!r}.")
         if self.output_tokens_per_second == 0:
             raise ValueError(f"output_tokens_per_second must be positive for {self.name!r}.")
+        uses_analytical_latency = self.parameters_billions is not None
+        if uses_analytical_latency and self.architecture is None:
+            raise ValueError(
+                f"Analytical profile {self.name!r} requires an architecture."
+            )
+        if self.architecture is not None and not uses_analytical_latency:
+            raise ValueError(
+                f"Profile {self.name!r} has an architecture but no parameter count."
+            )
+        if self.weight_bits <= 0 or self.diffusion_steps <= 0:
+            raise ValueError("Precision and diffusion steps must be positive.")
 
 
 @dataclass(frozen=True)
@@ -70,9 +97,17 @@ class EconomicsScenario:
     network_s: float = 0.0
     router_overhead_s: float = 0.0
     notes: str = ""
+    latency_method: str = "analytical"
+    effective_tflops: float = 60.0
+    memory_bandwidth_gbps: float = 900.0
+    fixed_model_overhead_s: float = 0.015
+    output_base_tokens: float = 24.0
+    output_tokens_per_prompt_token: float = 0.20
+    output_min_tokens: int = 16
+    output_max_tokens: int = 256
 
     @classmethod
-    def from_json(cls, path: str | Path) -> "EconomicsScenario":
+    def from_json(cls, path: str | Path) -> EconomicsScenario:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         raw_profiles = payload.pop("models")
         profiles = tuple(
@@ -88,6 +123,8 @@ class EconomicsScenario:
             raise ValueError("A scenario requires non-empty name and as_of fields.")
         if self.network_s < 0 or self.router_overhead_s < 0:
             raise ValueError("Scenario overhead values cannot be negative.")
+        if self.latency_method not in {"analytical", "throughput"}:
+            raise ValueError("latency_method must be 'analytical' or 'throughput'.")
         if len({profile.name for profile in self.profiles}) != len(self.profiles):
             raise ValueError("Scenario model names must be unique.")
         for profile in self.profiles:
@@ -132,6 +169,7 @@ class PublicBenchmarkResult:
     summary: pd.DataFrame
     threshold_search: pd.DataFrame
     decisions: pd.DataFrame
+    router_name: str = "tfidf_safety_router"
 
 
 def _bench_root(root: str | Path) -> Path:
@@ -223,7 +261,12 @@ def load_llmrouterbench(
 def simulate_economics(
     records: pd.DataFrame, scenario: EconomicsScenario
 ) -> pd.DataFrame:
-    """Attach realized cost and simulated latency to outcome records."""
+    """Attach cost and a scenario latency proxy to outcome records.
+
+    In the preferred ``analytical`` mode, latency depends only on model-card
+    attributes and prompt tokens.  Realized completion tokens and measured
+    candidate timing are deliberately excluded from the routing POC.
+    """
     missing_columns = REQUIRED_RECORD_COLUMNS - set(records)
     if missing_columns:
         raise ValueError(f"Benchmark records are missing columns: {missing_columns}")
@@ -256,19 +299,53 @@ def simulate_economics(
             raise ValueError(
                 f"No token prices or recorded cost are available for {row.model!r}."
             )
-        if profile.ttft_s is None or profile.output_tokens_per_second is None:
-            raise ValueError(
-                f"Latency simulation requires ttft_s and "
-                f"output_tokens_per_second for {row.model!r}."
+        if scenario.latency_method == "analytical":
+            if profile.parameters_billions is None or profile.architecture is None:
+                raise ValueError(
+                    "Analytical latency requires parameters_billions and "
+                    f"architecture for {row.model!r}."
+                )
+            analytical_profile = AnalyticalModelProfile(
+                name=profile.name,
+                parameters_billions=profile.parameters_billions,
+                active_parameters_billions=profile.active_parameters_billions,
+                architecture=profile.architecture,
+                weight_bits=profile.weight_bits,
+                diffusion_steps=profile.diffusion_steps,
+                diffusion_block_size=profile.diffusion_block_size,
+                architecture_factor=profile.architecture_factor,
             )
-        latencies[position] = (
-            scenario.network_s
-            + profile.queue_s
-            + profile.ttft_s
-            + row.completion_tokens / profile.output_tokens_per_second
-        )
+            model_latency = estimate_latency_seconds(
+                [row.prompt_tokens],
+                analytical_profile,
+                HardwareProfile(
+                    effective_tflops=scenario.effective_tflops,
+                    memory_bandwidth_gbps=scenario.memory_bandwidth_gbps,
+                    fixed_overhead_s=scenario.fixed_model_overhead_s,
+                ),
+                OutputLengthPolicy(
+                    base_tokens=scenario.output_base_tokens,
+                    tokens_per_prompt_token=scenario.output_tokens_per_prompt_token,
+                    minimum_tokens=scenario.output_min_tokens,
+                    maximum_tokens=scenario.output_max_tokens,
+                ),
+            )[0]
+            latencies[position] = scenario.network_s + profile.queue_s + model_latency
+        else:
+            if profile.ttft_s is None or profile.output_tokens_per_second is None:
+                raise ValueError(
+                    f"Throughput latency requires ttft_s and "
+                    f"output_tokens_per_second for {row.model!r}."
+                )
+            latencies[position] = (
+                scenario.network_s
+                + profile.queue_s
+                + profile.ttft_s
+                + row.completion_tokens / profile.output_tokens_per_second
+            )
     output["simulated_cost"] = costs
     output["simulated_latency_s"] = latencies
+    output["latency_source"] = scenario.latency_method
     output["cost_source"] = cost_sources
     output["economics_scenario"] = scenario.name
     output["economics_as_of"] = scenario.as_of
@@ -495,6 +572,30 @@ def _route_from_probability(
     return np.where(eligible & cheap_enough, predicted_resource, np.inf).argmin(axis=1)
 
 
+def _route_from_oracle_probability(
+    probability: np.ndarray,
+    predicted_resource: np.ndarray,
+    threshold: float,
+    fallback_idx: int,
+    minimum_predicted_savings: float,
+) -> np.ndarray:
+    """Deploy an oracle-imitation classifier with a conservative fallback gate."""
+
+    proposed = probability.argmax(axis=1)
+    confidence = probability[np.arange(len(probability)), proposed]
+    fallback_resource = predicted_resource[:, fallback_idx]
+    proposed_resource = predicted_resource[np.arange(len(probability)), proposed]
+    accept = (
+        (proposed != fallback_idx)
+        & (confidence >= threshold)
+        & (
+            proposed_resource
+            <= fallback_resource * (1.0 - minimum_predicted_savings)
+        )
+    )
+    return np.where(accept, proposed, fallback_idx)
+
+
 def _dataset_lookup_choices(
     panel: BenchmarkPanel,
     split: BenchmarkSplit,
@@ -521,28 +622,63 @@ def run_public_benchmark(
     threshold_grid: Iterable[float] = (0.5, 0.6, 0.7, 0.8, 0.9, 0.95),
     router_overhead_s: float = 0.0,
     seed: int = 42,
+    routing_probabilities: np.ndarray | None = None,
+    probability_kind: str = "safety",
+    router_name: str | None = None,
 ) -> PublicBenchmarkResult:
-    """Run headroom analysis and a TF-IDF safety-router experiment.
+    """Run headroom analysis and a sealed-test routing experiment.
 
     Thresholds are selected on validation using a one-sided confidence bound.
     Test outcomes are opened once after the threshold and activation guard freeze.
     """
     if objective not in {"cost", "latency"}:
         raise ValueError("Objective must be 'cost' or 'latency'.")
+    if probability_kind not in {"safety", "oracle"}:
+        raise ValueError("probability_kind must be 'safety' or 'oracle'.")
     if not 0.5 < confidence < 1.0:
         raise ValueError("confidence must be between 0.5 and 1.0.")
     resource = panel.cost if objective == "cost" else panel.latency
     overhead = router_overhead_s if objective == "latency" else 0.0
     fallback_idx = int(panel.score[split.train].mean(axis=0).argmax())
     fallback_model = panel.models[fallback_idx]
-    probability, _ = _fit_safety_probabilities(
-        panel, split, fallback_idx, quality_epsilon, seed
+    if routing_probabilities is None:
+        if probability_kind != "safety":
+            raise ValueError("Oracle routing requires supplied ModernBERT probabilities.")
+        probability, _ = _fit_safety_probabilities(
+            panel, split, fallback_idx, quality_epsilon, seed
+        )
+        router_name = router_name or "tfidf_safety_router"
+    else:
+        probability = np.asarray(routing_probabilities, dtype=float)
+        if probability.shape != panel.score.shape:
+            raise ValueError("Routing probabilities must match panel.score shape.")
+        if (
+            not np.isfinite(probability).all()
+            or np.any(probability < 0)
+            or np.any(probability > 1)
+        ):
+            raise ValueError("Routing probabilities must be finite values in [0, 1].")
+        if probability_kind == "oracle" and not np.allclose(
+            probability.sum(axis=1), 1.0, atol=1e-4
+        ):
+            raise ValueError("Oracle class probabilities must sum to one per prompt.")
+        router_name = router_name or "modernbert_oracle_router"
+    # Cost requires a train-only predictor. Analytical latency is already known
+    # from prompt size at route time, so no test outcomes or response lengths leak.
+    resource_prediction = (
+        panel.latency.copy()
+        if objective == "latency"
+        else _predicted_resource(panel, split, resource)
     )
-    resource_prediction = _predicted_resource(panel, split, resource)
+    route_function = (
+        _route_from_oracle_probability
+        if probability_kind == "oracle"
+        else _route_from_probability
+    )
 
     search_rows = []
     for threshold in threshold_grid:
-        all_choices = _route_from_probability(
+        all_choices = route_function(
             probability,
             resource_prediction,
             float(threshold),
@@ -575,7 +711,7 @@ def run_public_benchmark(
             ascending=[False, True, False],
         ).iloc[0]
         selected_threshold = float(best.threshold)
-        router_choices = _route_from_probability(
+        router_choices = route_function(
             probability,
             resource_prediction,
             selected_threshold,
@@ -596,7 +732,7 @@ def run_public_benchmark(
         "cheapest_single": (cheapest_choices[split.test], 0.0),
         "dataset_lookup": (lookup_choices[split.test], 0.0),
         "outcome_oracle": (oracle_choices, 0.0),
-        "tfidf_safety_router": (
+        router_name: (
             router_choices[split.test],
             overhead if router_active else 0.0,
         ),
@@ -630,7 +766,9 @@ def run_public_benchmark(
     decisions["fallback_quality"] = panel.score[split.test, fallback_idx]
     decisions["selected_resource"] = resource[split.test][rows, selected_test]
     decisions["fallback_resource"] = resource[split.test, fallback_idx]
-    decisions["p_safe_selected"] = probability[split.test][rows, selected_test]
+    decisions["selected_routing_probability"] = probability[split.test][
+        rows, selected_test
+    ]
 
     return PublicBenchmarkResult(
         objective=objective,
@@ -641,6 +779,7 @@ def run_public_benchmark(
         summary=summary,
         threshold_search=threshold_search,
         decisions=decisions,
+        router_name=router_name,
     )
 
 
@@ -658,6 +797,7 @@ def export_public_benchmark(
     manifest = {
         "schema_version": 1,
         "objective": result.objective,
+        "router_name": result.router_name,
         "fallback_model": result.fallback_model,
         "selected_threshold": result.selected_threshold,
         "router_active": result.router_active,
@@ -673,6 +813,18 @@ def export_public_benchmark(
             "network_s": scenario.network_s,
             "router_overhead_s": scenario.router_overhead_s,
             "notes": scenario.notes,
+            "latency_method": scenario.latency_method,
+            "hardware": {
+                "effective_tflops": scenario.effective_tflops,
+                "memory_bandwidth_gbps": scenario.memory_bandwidth_gbps,
+                "fixed_model_overhead_s": scenario.fixed_model_overhead_s,
+            },
+            "output_length_policy": {
+                "base_tokens": scenario.output_base_tokens,
+                "tokens_per_prompt_token": scenario.output_tokens_per_prompt_token,
+                "minimum_tokens": scenario.output_min_tokens,
+                "maximum_tokens": scenario.output_max_tokens,
+            },
             "models": {
                 profile.name: {
                     "input_price_per_million": profile.input_price_per_million,
@@ -680,6 +832,13 @@ def export_public_benchmark(
                     "ttft_s": profile.ttft_s,
                     "output_tokens_per_second": profile.output_tokens_per_second,
                     "queue_s": profile.queue_s,
+                    "parameters_billions": profile.parameters_billions,
+                    "active_parameters_billions": profile.active_parameters_billions,
+                    "architecture": profile.architecture,
+                    "weight_bits": profile.weight_bits,
+                    "diffusion_steps": profile.diffusion_steps,
+                    "diffusion_block_size": profile.diffusion_block_size,
+                    "architecture_factor": profile.architecture_factor,
                 }
                 for profile in scenario.profiles
             },
