@@ -172,14 +172,14 @@ Then:
 
 1. Select **Runtime → Change runtime type → GPU**.
 2. Run the notebook from top to bottom.
-3. In the clearly marked configuration cell, replace the model-profile
-   placeholders with exact model directory names shown by the inventory cell and
-   their sourced parameter/architecture facts.
+3. Optionally customize the clearly marked model-profile cell. Its default 7B,
+   8B, and 9B candidate panel is ready to run unchanged.
 
 The notebook itself:
 
 - clones the `develop` branch;
-- installs the package;
+- installs the package in non-editable mode, registers `src` in the live kernel,
+  and verifies `llm_router` immediately (no runtime restart is needed);
 - downloads and extracts the official pre-collected LLMRouterBench archive from
   Hugging Face;
 - checks candidate names and analytical assumptions;
@@ -194,6 +194,12 @@ The notebook itself:
   runtime is discarded.
 
 No CLI or separate candidate-inference notebook is required.
+
+If a previous Colab session left `/content/LLM_Router` behind, rerun the first
+setup cell. It fast-forwards `develop`, reinstalls the current checkout, and
+prints the exact `llm_router` path before the 1.28 GB benchmark download begins.
+The package resolver may warn about Colab's unused Gradio installation; that
+warning is unrelated to this notebook and does not stop router training.
 
 ## Command-line equivalent
 

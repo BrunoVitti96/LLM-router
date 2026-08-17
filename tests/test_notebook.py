@@ -41,6 +41,11 @@ def test_hybrid_poc_notebook_is_clean_didactic_and_syntactically_valid():
     assert all(lesson in full_text for lesson in required_lessons)
     assert "train_modernbert_oracle_poc" not in full_text
     assert "probability_kind=\"oracle\"" not in full_text
+    assert '-e \".[notebook]\"' not in full_text
+    assert 'sys.path.insert(0, SOURCE_ROOT)' in full_text
+    assert 'import llm_router' in full_text
+    assert full_text.count("%pip install") == 1
+    assert "replace-with" not in full_text
 
     for cell in code_cells:
         source = "".join(cell["source"])
