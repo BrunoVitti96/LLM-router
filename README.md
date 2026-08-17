@@ -118,6 +118,19 @@ Install the project:
 pip install -e ".[dev]"
 ```
 
+### Recommended: didactic Jupyter notebook
+
+Open `notebooks/02_train_modernbert_oracle_poc.ipynb` from the repository root.
+It walks through inventory inspection, model-profile assumptions, the
+completion-length leakage check, dataset-disjoint splitting, oracle headroom,
+ModernBERT training, validation policy selection, sealed-test interpretation,
+and artifact export. Every code cell is clean and intended to be run in order.
+
+The older `01_train_modernbert_router.ipynb` is retained only to reproduce the
+historical measured-latency experiment.
+
+### Command-line equivalent
+
 Download and extract
 [LLMRouterBench](https://github.com/ynulihao/LLMRouterBench), then inspect its
 dataset/model directory names:
@@ -178,6 +191,10 @@ src/llm_router/
 ├── public_benchmark.py         # benchmark ingestion, policy selection, reports
 ├── benchmark_cli.py            # executable POC
 └── models/modernbert_router.py # ModernBERT + LoRA architectures
+
+notebooks/
+├── 01_train_modernbert_router.ipynb      # historical measured-latency run
+└── 02_train_modernbert_oracle_poc.ipynb  # recommended didactic POC
 ```
 
 The earlier measured-latency v4 notebook remains for comparison, but it is no
