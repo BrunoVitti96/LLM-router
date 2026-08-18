@@ -61,30 +61,30 @@ The hindsight-oracle head is training-only.
 
 ## Deployment objective
 
-Let \(f\) be the strongest model on training data,
-\(\widehat P_m(\text{safe}\mid x)\) the calibrated ModernBERT safety estimate,
-and \(\widehat L_m(x)\) analytical latency. The selector solves:
+Let $f$ be the strongest model on training data,
+$\widehat P_m(\text{safe}\mid x)$ the calibrated ModernBERT safety estimate,
+and $\widehat L_m(x)$ analytical latency. The selector solves:
 
-\[
+$$
 \pi(x)=\arg\min_m \widehat L_m(x)
-\]
+$$
 
 subject to:
 
-\[
+$$
 \widehat P_m(\text{safe}\mid x)\ge\tau,
 \qquad
 \widehat L_m(x)\le(1-\delta)\widehat L_f(x).
-\]
+$$
 
 The fallback is always eligible. The default minimum predicted speedup is
-\(\delta=0.02\). Validation chooses \(\tau\) and activates the router only when:
+$\delta=0.02$. Validation chooses $\tau$ and activates the router only when:
 
-\[
+$$
 \operatorname{LCB}_{95\%}\left(
 \frac{\mathbb E[Q_{\pi(x)}]}{\mathbb E[Q_f]}
 \right)\ge0.98
-\]
+$$
 
 and net analytical latency savings remain positive after router overhead.
 
@@ -92,41 +92,41 @@ and net analytical latency savings remain positive after router overhead.
 
 For each non-fallback candidate:
 
-\[
+$$
 y_m(x)=\mathbf 1[Q_m(x)\ge Q_f(x)-\epsilon_q].
-\]
+$$
 
 The safety loss uses independent binary cross-entropy with a per-candidate
-positive weight \(N_{unsafe}/N_{safe}\), clipped to `[0.10, 10.0]`:
+positive weight $N_{unsafe}/N_{safe}$, clipped to `[0.10, 10.0]`:
 
-\[
+$$
 \mathcal L_{safety}=\frac{1}{N(M-1)}
 \sum_{x,m}\operatorname{BCEWithLogits}(s_m(x),y_m(x);w_m).
-\]
+$$
 
 The hindsight oracle can see recorded outcomes and chooses the fastest model
 that preserves fallback-relative quality:
 
-\[
+$$
 o(x)=\arg\min_m\widehat L_m(x)
 \quad\text{subject to}\quad
 Q_m(x)\ge Q_f(x)-\epsilon_q.
-\]
+$$
 
 Its auxiliary loss combines oracle imitation, expected quality risk, and
 normalized latency regret:
 
-\[
+$$
 \mathcal L_{oracle}=(1+g_o)CE(z,o)
 +4\sum_m p_m d_m+\sum_m p_m r_m.
-\]
+$$
 
 The complete objective is:
 
-\[
+$$
 \boxed{\mathcal L_{train}=\mathcal L_{safety}
 +0.25\mathcal L_{oracle}}.
-\]
+$$
 
 After checkpoint selection, each candidate receives a Platt scaler. Validation
 rows use out-of-fold calibrated probabilities during threshold selection, so an
@@ -135,23 +135,23 @@ fitted on all validation rows and saved in the artifact.
 
 ## Analytical latency
 
-For active parameters \(P_m\), effective compute \(F\), memory bandwidth \(B\),
-and precision \(b\):
+For active parameters $P_m$, effective compute $F$, memory bandwidth $B$,
+and precision $b$:
 
-\[
+$$
 t_{compute/token}=\frac{2P_m}{F},
 \qquad
 t_{memory/pass}=\frac{P_m b/8}{B}.
-\]
+$$
 
 Prefill depends on prompt length. Autoregressive decoding uses one sequential
 weight pass per expected output token. Diffusion decoding uses declared
 denoising passes per generated block. Expected output length depends only on
 prompt size:
 
-\[
+$$
 \widehat n_{out}=\operatorname{clip}(a+cn,n_{min},n_{max}).
-\]
+$$
 
 Realized completion length is excluded. The notebook changes every recorded
 completion length by 100× and asserts that analytical latency is unchanged.
