@@ -34,6 +34,35 @@ That evidence led to five concrete changes:
 The mixed-precision loop also avoids advancing the learning-rate scheduler when
 `GradScaler` skips an optimizer step.
 
+## What changed after the first successful random-split run
+
+Seed 42 routed 20.77% of 2,807 sealed-test prompts to Fin-R1. It retained
+99.55% of fallback quality, with a one-sided 95% lower confidence bound of
+98.75%, and saved 2.33% analytical latency after the assumed 4 ms router
+overhead. This is a successful single-run feasibility result, not yet a
+multi-seed or dataset-OOD claim.
+
+The result exposed several places where a seemingly good aggregate number
+could still be misleading. The next iteration therefore adds:
+
+1. normalized prompt-content hashes and stratified group splitting, so a
+   repeated question cannot cross random train, validation, and test under
+   different benchmark IDs;
+2. a 1 percentage-point validation safety margin: validation must reach a 99%
+   quality-retention LCB before the sealed 98% test gate is opened;
+3. a dense threshold grid from 0.85 through 0.95 in 0.005 increments;
+4. per-dataset retention, a one-sided Wilson upper bound on quality-loss rate,
+   and safety precision among non-fallback routes;
+5. exact ModernBERT-tokenizer truncation diagnostics;
+6. separate learning rates for LoRA and the new heads, plus validation early
+   stopping; and
+7. router-overhead sensitivity and a break-even-overhead calculation.
+
+For a numerical example, the successful run saved about 48.7 ms per prompt
+before router overhead. With the assumed 4 ms router cost, net savings were
+44.7 ms. A real 20 ms router cost would reduce the same frozen policy to about
+28.7 ms of savings, while an overhead near 48.7 ms would erase the benefit.
+
 ## Routing logic
 
 ```mermaid
@@ -86,7 +115,15 @@ $$
 \right)\ge0.98
 $$
 
-and net analytical latency savings remain positive after router overhead.
+and net analytical latency savings remain positive after router overhead. The
+notebook adds a validation-only margin $\gamma=0.01$, so activation requires:
+
+$$
+\operatorname{LCB}_{95\%,validation}\ge 0.98+\gamma=0.99.
+$$
+
+The sealed-test pass criterion remains 0.98. The margin is not added to the test
+after results are seen; it is a predeclared guard against validation optimism.
 
 ## LOSS
 
@@ -203,6 +240,12 @@ shared ModernBERT representation during training and is not consulted by the
 production selector. The loss is therefore a differentiable training proxy for
 the real objective: minimize latency subject to preserving fallback quality.
 
+The LoRA adapter uses learning rate $10^{-4}$ while the randomly initialized
+heads use $2\times10^{-4}$. Training can run for at most eight epochs, but stops
+after two consecutive non-improving validation epochs once at least two epochs
+have completed. This responds to the seed-42 history, where validation loss was
+best at epoch 2 even though training loss continued to fall through epoch 5.
+
 After checkpoint selection, each candidate receives a Platt scaler. Validation
 rows use out-of-fold calibrated probabilities during threshold selection, so an
 example never calibrates its own confidence. Final deployment parameters are
@@ -258,9 +301,16 @@ pre-collected quality results and sourced inference settings are available.
 
 ### 1. Random-split feasibility
 
-Every dataset contributes prompt-disjoint train, validation, and test examples.
-This asks whether prompt content contains enough signal for safe replacement.
-It is the default notebook mode.
+Five stratified group folds produce an approximate 60/20/20 train, validation,
+and test split. The group key is SHA-256 of the NFKC-normalized prompt after
+normalizing line endings and removing trailing whitespace. Case and leading
+indentation remain significant because changing them can alter code semantics.
+
+Thus, two source records with different IDs but the same normalized prompt must
+remain in one split. For example, `mmlupro::test_1000::17` and
+`mmlupro::test_3000::17` cannot enter train and test separately if their prompt
+content is identical. This experiment asks whether prompt content contains
+enough signal for safe replacement and remains the default notebook mode.
 
 ### 2. Dataset-OOD stress test
 
@@ -283,9 +333,12 @@ generalization.
 5. Only then change to `SPLIT_MODE = "dataset_ood"` and create separate ZIPs.
 
 The notebook downloads LLMRouterBench, checks candidate names, proves
-completion-length leakage is absent, runs validation-only sensitivity scenarios,
-trains and calibrates ModernBERT, freezes the policy, opens the sealed test, and
-exports a reconstructable artifact plus report.
+completion-length leakage is absent, audits prompt-content groups, runs
+validation-only sensitivity scenarios, trains and calibrates ModernBERT with
+early stopping, freezes the policy with a validation safety margin, opens the
+sealed test, and exports a reconstructable artifact plus report. The canonical
+notebook is intentionally stored without execution output; the downloaded ZIP
+is the run record.
 
 The resolver may warn about Colab's unused Gradio installation. That warning is
 not a router-training failure.
@@ -298,12 +351,17 @@ The report directory contains:
 - `threshold_search.csv`: validation quality/savings frontier;
 - `candidate_diagnostics.csv`: quality, safety, speed, and oracle-selection rate
   by split and candidate;
+- `per_dataset_metrics.csv`: strategy quality, savings, harm bounds, and routing
+  behavior for every sealed-test dataset;
 - `validation_sensitivity.csv`: validation-only oracle headroom across analytical
   hardware and output-length assumptions;
+- `test_router_overhead_sensitivity.csv`: the frozen test policy under several
+  router-overhead assumptions;
 - `test_decisions.parquet`: sealed-test prompt-level decisions;
 - `experiment_manifest.json`: analytical assumptions and explicit POC status;
 - `modernbert_router/training_history.csv`;
 - `modernbert_router/calibration_diagnostics.csv`;
+- `modernbert_router/input_diagnostics.json`;
 - exported Platt parameters, LoRA adapter, heads, tokenizer, and router manifest.
 
 `poc_passed` is true only when the frozen policy also passes every sealed-test
@@ -350,6 +408,8 @@ llm-router-benchmark \
 - every retained alternative has a non-zero oracle-selection rate;
 - calibrated ModernBERT routes a non-trivial sealed-test fraction;
 - the sealed-test 95% quality-retention LCB is at least 98%;
+- the random split is disjoint by normalized prompt content, not only record ID;
+- per-dataset retention and the harm-rate upper bound are reported;
 - net analytical savings remain positive after router overhead;
 - random feasibility passes across several seeds; and
 - dataset-OOD results are reported separately and honestly.

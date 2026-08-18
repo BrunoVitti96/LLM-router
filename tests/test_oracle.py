@@ -153,3 +153,7 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
     )
     assert len(result.history) == 1
     assert result.history.skipped_optimizer_steps.iloc[0] == 0
+    assert result.best_epoch == 1
+    assert result.epochs_completed == 1
+    assert not result.stopped_early
+    assert result.input_diagnostics["examples"] == len(panel.examples)

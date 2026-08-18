@@ -1,14 +1,17 @@
 import json
 
 import numpy as np
+import pandas as pd
 
 from llm_router.public_benchmark import (
+    BenchmarkPanel,
     EconomicsScenario,
     ModelProfile,
     benchmark_inventory,
     export_public_benchmark,
     load_llmrouterbench,
     make_complete_panel,
+    normalized_prompt_hash,
     run_public_benchmark,
     simulate_economics,
     split_benchmark,
@@ -120,6 +123,37 @@ def test_dataset_ood_split_is_disjoint(tmp_path):
     assert len(split.train) + len(split.validation) + len(split.test) == 45
 
 
+def test_random_split_groups_repeated_prompt_content():
+    prompts = [f"unique prompt {index}" for index in range(20)]
+    prompts[19] = prompts[0]
+    examples = np.array(["a"] * 10 + ["b"] * 10, dtype=object)
+    frame = {
+        "dataset": examples,
+        "prompt": prompts,
+        "prompt_tokens": np.arange(20) + 10,
+    }
+    example_frame = pd.DataFrame(frame)
+    example_frame["prompt_hash"] = example_frame.prompt.map(normalized_prompt_hash)
+    panel = BenchmarkPanel(
+        examples=example_frame,
+        models=("fast", "fallback"),
+        score=np.ones((20, 2)),
+        cost=np.ones((20, 2)),
+        latency=np.ones((20, 2)),
+    )
+
+    split = split_benchmark(panel, mode="random", seed=42)
+    split_name = {}
+    for name, indices in (
+        ("train", split.train),
+        ("validation", split.validation),
+        ("test", split.test),
+    ):
+        for index in indices:
+            split_name[index] = name
+    assert split_name[0] == split_name[19]
+
+
 def test_export_records_explicit_poc_status_and_candidate_diagnostics(tmp_path):
     records = load_llmrouterbench(synthetic_release(tmp_path), models=MODELS)
     panel = make_complete_panel(simulate_economics(records, scenario()), MODELS)
@@ -141,6 +175,9 @@ def test_export_records_explicit_poc_status_and_candidate_diagnostics(tmp_path):
     assert manifest["failure_reasons"]
     assert manifest["success_criteria"]["requires_nontrivial_routing"]
     assert (output / "candidate_diagnostics.csv").is_file()
+    assert (output / "per_dataset_metrics.csv").is_file()
+    assert (output / "test_router_overhead_sensitivity.csv").is_file()
+    assert manifest["schema_version"] == 3
 
 
 def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
@@ -167,6 +204,13 @@ def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
         "test",
     }
     assert result.summary.loc["outcome_oracle", "oracle_savings_capture"] == 1.0
+    assert {
+        "quality_loss_rate_ucl",
+        "routed_safety_precision",
+        "macro_dataset_quality_retention",
+    }.issubset(result.summary.columns)
+    assert not result.per_dataset_metrics.empty
+    assert not result.router_overhead_sensitivity.empty
 
     permissive = run_public_benchmark(
         panel,

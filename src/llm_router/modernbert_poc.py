@@ -38,6 +38,14 @@ class ModernBERTHybridPOCResult:
     fallback_index: int
     nonfallback_indices: np.ndarray
     history: pd.DataFrame
+    input_diagnostics: dict[str, float | int]
+    encoder_learning_rate: float
+    head_learning_rate: float
+    minimum_epochs: int
+    early_stopping_patience: int | None
+    best_epoch: int
+    epochs_completed: int
+    stopped_early: bool
     training_seconds: float
 
 
@@ -55,6 +63,9 @@ def train_modernbert_hybrid_poc(
     epochs: int = 5,
     batch_size: int = 8,
     learning_rate: float = 1e-4,
+    head_learning_rate: float | None = None,
+    minimum_epochs: int = 2,
+    early_stopping_patience: int | None = 2,
     quality_epsilon: float = 0.0,
     safety_loss_weight: float = 1.0,
     oracle_auxiliary_weight: float = 0.25,
@@ -66,8 +77,19 @@ def train_modernbert_hybrid_poc(
     safety; ``panel.latency`` must contain the deterministic analytical proxy.
     """
 
-    if epochs <= 0 or batch_size <= 0 or learning_rate <= 0:
+    if head_learning_rate is None:
+        head_learning_rate = learning_rate * 2
+    if (
+        epochs <= 0
+        or batch_size <= 0
+        or learning_rate <= 0
+        or head_learning_rate <= 0
+    ):
         raise ValueError("epochs, batch_size, and learning_rate must be positive.")
+    if minimum_epochs <= 0:
+        raise ValueError("minimum_epochs must be positive.")
+    if early_stopping_patience is not None and early_stopping_patience <= 0:
+        raise ValueError("early_stopping_patience must be positive or None.")
     if safety_loss_weight <= 0 or oracle_auxiliary_weight < 0:
         raise ValueError("Loss weights must be non-negative and safety must be positive.")
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
@@ -102,6 +124,34 @@ def train_modernbert_hybrid_poc(
     )
     model.to(device)
 
+    # Measure the router's own tokenization rather than approximating truncation
+    # with token counts recorded by a different candidate tokenizer.
+    router_input_lengths: list[int] = []
+    for start in range(0, len(texts), 64):
+        diagnostic_batch = tokenizer(
+            [f"classification: {text}" for text in texts[start : start + 64]],
+            padding=False,
+            truncation=False,
+        )
+        attention_mask = diagnostic_batch["attention_mask"]
+        if isinstance(attention_mask, torch.Tensor):
+            router_input_lengths.extend(
+                attention_mask.sum(dim=1).to(torch.int64).tolist()
+            )
+        else:
+            router_input_lengths.extend(sum(mask) for mask in attention_mask)
+    input_lengths = np.asarray(router_input_lengths, dtype=int)
+    truncated = input_lengths > config.max_input_tokens
+    input_diagnostics: dict[str, float | int] = {
+        "examples": len(input_lengths),
+        "max_input_tokens": int(config.max_input_tokens),
+        "truncated_examples": int(truncated.sum()),
+        "truncation_rate": float(truncated.mean()),
+        "router_tokens_p50": float(np.quantile(input_lengths, 0.50)),
+        "router_tokens_p95": float(np.quantile(input_lengths, 0.95)),
+        "router_tokens_max": int(input_lengths.max()),
+    }
+
     def collate(indices: list[int]):
         normalized = np.asarray(indices, dtype=int)
         encoded = tokenizer(
@@ -126,9 +176,21 @@ def train_modernbert_hybrid_poc(
     trainable_names = {
         name for name, parameter in model.named_parameters() if parameter.requires_grad
     }
+    encoder_parameters = [
+        parameter
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad and name.startswith("encoder.")
+    ]
+    head_parameters = [
+        parameter
+        for name, parameter in model.named_parameters()
+        if parameter.requires_grad and not name.startswith("encoder.")
+    ]
     optimizer = torch.optim.AdamW(
-        trainable_parameters,
-        lr=learning_rate,
+        [
+            {"params": encoder_parameters, "lr": learning_rate},
+            {"params": head_parameters, "lr": head_learning_rate},
+        ],
         weight_decay=config.weight_decay,
     )
     total_steps = max(1, epochs * len(train_loader))
@@ -158,6 +220,8 @@ def train_modernbert_hybrid_poc(
     )
     best_state: dict[str, torch.Tensor] | None = None
     best_validation_loss = math.inf
+    best_epoch = 0
+    stopped_early = False
     history: list[dict[str, float]] = []
     started = time.perf_counter()
 
@@ -243,15 +307,25 @@ def train_modernbert_hybrid_poc(
                     validation_totals["oracle_auxiliary"] / len(split.validation)
                 ),
                 "skipped_optimizer_steps": skipped_optimizer_steps,
+                "encoder_learning_rate": optimizer.param_groups[0]["lr"],
+                "head_learning_rate": optimizer.param_groups[1]["lr"],
             }
         )
         if validation_loss < best_validation_loss:
             best_validation_loss = validation_loss
+            best_epoch = epoch
             best_state = {
                 name: value.detach().cpu().clone()
                 for name, value in model.state_dict().items()
                 if name in trainable_names
             }
+        elif (
+            early_stopping_patience is not None
+            and epoch >= minimum_epochs
+            and epoch - best_epoch >= early_stopping_patience
+        ):
+            stopped_early = True
+            break
 
     if best_state is None:
         raise RuntimeError("ModernBERT training produced no checkpoint.")
@@ -309,6 +383,14 @@ def train_modernbert_hybrid_poc(
         fallback_index=fallback_index,
         nonfallback_indices=nonfallback_indices,
         history=pd.DataFrame(history),
+        input_diagnostics=input_diagnostics,
+        encoder_learning_rate=learning_rate,
+        head_learning_rate=head_learning_rate,
+        minimum_epochs=minimum_epochs,
+        early_stopping_patience=early_stopping_patience,
+        best_epoch=best_epoch,
+        epochs_completed=len(history),
+        stopped_early=stopped_early,
         training_seconds=time.perf_counter() - started,
     )
 
@@ -323,6 +405,7 @@ def export_modernbert_hybrid_poc(
     poc_passed: bool,
     failure_reasons: tuple[str, ...] = (),
     minimum_predicted_savings: float = 0.02,
+    validation_quality_margin: float = 0.0,
     safety_loss_weight: float = 1.0,
     oracle_auxiliary_weight: float = 0.25,
     config: RouterConfig = DEFAULT_CONFIG,
@@ -343,6 +426,9 @@ def export_modernbert_hybrid_poc(
     result.history.to_csv(output_dir / "training_history.csv", index=False)
     result.calibration_diagnostics.to_csv(
         output_dir / "calibration_diagnostics.csv", index=False
+    )
+    (output_dir / "input_diagnostics.json").write_text(
+        json.dumps(result.input_diagnostics, indent=2), encoding="utf-8"
     )
     nonfallback_models = tuple(
         model_names[index] for index in result.nonfallback_indices
@@ -375,6 +461,7 @@ def export_modernbert_hybrid_poc(
             },
         },
         "minimum_predicted_savings": minimum_predicted_savings,
+        "validation_quality_margin": validation_quality_margin,
         "validation_router_active": router_active,
         "poc_passed": poc_passed,
         "failure_reasons": failure_reasons,
@@ -382,6 +469,16 @@ def export_modernbert_hybrid_poc(
         "deployment_enabled": router_active and poc_passed,
         "latency_source": "analytical_model_profile_and_prompt_tokens",
         "candidate_inference_used_for_latency": False,
+        "optimization": {
+            "encoder_learning_rate": result.encoder_learning_rate,
+            "head_learning_rate": result.head_learning_rate,
+            "minimum_epochs": result.minimum_epochs,
+            "early_stopping_patience": result.early_stopping_patience,
+            "best_epoch": result.best_epoch,
+            "epochs_completed": result.epochs_completed,
+            "stopped_early": result.stopped_early,
+        },
+        "input_diagnostics": result.input_diagnostics,
         "training_seconds": result.training_seconds,
     }
     (output_dir / "manifest.json").write_text(

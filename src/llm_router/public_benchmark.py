@@ -6,7 +6,9 @@ experiment that can establish routing headroom before training ModernBERT.
 
 from __future__ import annotations
 
+import hashlib
 import json
+import unicodedata
 import warnings
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
@@ -17,6 +19,7 @@ import numpy as np
 import pandas as pd
 from sklearn.feature_extraction.text import TfidfVectorizer
 from sklearn.linear_model import LogisticRegression
+from sklearn.model_selection import StratifiedGroupKFold
 
 from llm_router.analytical_latency import (
     AnalyticalModelProfile,
@@ -34,6 +37,21 @@ REQUIRED_RECORD_COLUMNS = {
     "prompt_tokens",
     "completion_tokens",
 }
+
+DEFAULT_THRESHOLD_GRID = tuple(
+    np.unique(
+        np.round(
+            np.concatenate(
+                (
+                    np.array([0.50, 0.60, 0.70, 0.75, 0.80]),
+                    np.arange(0.85, 0.951, 0.005),
+                    np.array([0.975, 0.99]),
+                )
+            ),
+            3,
+        )
+    )
+)
 
 
 @dataclass(frozen=True)
@@ -170,11 +188,28 @@ class PublicBenchmarkResult:
     threshold_search: pd.DataFrame
     decisions: pd.DataFrame
     candidate_diagnostics: pd.DataFrame
+    per_dataset_metrics: pd.DataFrame
+    router_overhead_sensitivity: pd.DataFrame
     poc_passed: bool
     failure_reasons: tuple[str, ...]
     minimum_quality_retention: float
     confidence: float
+    validation_quality_margin: float = 0.0
     router_name: str = "tfidf_safety_router"
+
+
+def normalized_prompt_hash(prompt: object) -> str:
+    """Return a stable content identity while preserving meaningful code layout.
+
+    Unicode representation, line endings, and trailing whitespace are normalized.
+    Case and leading indentation are deliberately preserved because both can change
+    the meaning of code and natural-language prompts.
+    """
+
+    normalized = unicodedata.normalize("NFKC", str(prompt or ""))
+    normalized = normalized.replace("\r\n", "\n").replace("\r", "\n")
+    normalized = "\n".join(line.rstrip() for line in normalized.split("\n")).strip()
+    return hashlib.sha256(normalized.encode("utf-8")).hexdigest()
 
 
 def _bench_root(root: str | Path) -> Path:
@@ -407,6 +442,10 @@ def make_complete_panel(
         )
         .reset_index()
     )
+    metadata["prompt_hash"] = metadata.prompt.map(normalized_prompt_hash)
+    metadata["prompt_group_size"] = (
+        metadata.groupby("prompt_hash").prompt_hash.transform("size").astype(int)
+    )
 
     def pivot(column: str) -> np.ndarray:
         wide = filtered.pivot(index="example_id", columns="model", values=column)
@@ -446,26 +485,64 @@ def split_benchmark(
         validation = np.flatnonzero(panel.examples.dataset.isin(validation_datasets))
         test = np.flatnonzero(panel.examples.dataset.isin(test_datasets))
     elif mode == "random":
-        train_parts, validation_parts, test_parts = [], [], []
-        for dataset in datasets:
-            indices = np.flatnonzero(panel.examples.dataset.eq(dataset))
-            indices = rng.permutation(indices)
-            n_test = max(1, round(0.20 * len(indices)))
-            n_validation = max(1, round(0.20 * len(indices)))
-            if n_test + n_validation >= len(indices):
-                raise ValueError(
-                    f"Dataset {dataset!r} needs at least three complete prompts."
-                )
-            test_parts.append(indices[:n_test])
-            validation_parts.append(indices[n_test : n_test + n_validation])
-            train_parts.append(indices[n_test + n_validation :])
-        train = np.sort(np.concatenate(train_parts))
-        validation = np.sort(np.concatenate(validation_parts))
-        test = np.sort(np.concatenate(test_parts))
+        # Five stratified group folds give an approximate 60/20/20 split while
+        # ensuring repeated prompt content can never cross split boundaries.
+        # This is stronger than checking example IDs because public releases may
+        # contain overlapping source subsets with different IDs.
+        prompt_hash = (
+            panel.examples.prompt_hash.to_numpy()
+            if "prompt_hash" in panel.examples
+            else panel.examples.prompt.map(normalized_prompt_hash).to_numpy()
+        )
+        group_counts = (
+            pd.DataFrame({"dataset": panel.examples.dataset, "group": prompt_hash})
+            .drop_duplicates()
+            .groupby("dataset")
+            .size()
+        )
+        too_small = group_counts[group_counts < 5]
+        if not too_small.empty:
+            raise ValueError(
+                "Random grouped splitting requires at least five distinct prompt "
+                f"groups per dataset; too small: {too_small.to_dict()}."
+            )
+        splitter = StratifiedGroupKFold(
+            n_splits=5, shuffle=True, random_state=seed
+        )
+        fold_rows = [
+            heldout
+            for _, heldout in splitter.split(
+                np.zeros(len(panel.examples)),
+                panel.examples.dataset.to_numpy(),
+                groups=prompt_hash,
+            )
+        ]
+        test = np.sort(fold_rows[0])
+        validation = np.sort(fold_rows[1])
+        train = np.sort(np.concatenate(fold_rows[2:]))
         all_datasets = tuple(sorted(datasets))
         train_datasets = validation_datasets = test_datasets = all_datasets
     else:
         raise ValueError("Split mode must be 'random' or 'dataset_ood'.")
+    prompt_hash = (
+        panel.examples.prompt_hash.to_numpy()
+        if "prompt_hash" in panel.examples
+        else panel.examples.prompt.map(normalized_prompt_hash).to_numpy()
+    )
+    split_by_hash: dict[str, set[str]] = {}
+    for split_name, indices in (
+        ("train", train),
+        ("validation", validation),
+        ("test", test),
+    ):
+        for value in np.unique(prompt_hash[indices]):
+            split_by_hash.setdefault(str(value), set()).add(split_name)
+    leaked = [value for value, names in split_by_hash.items() if len(names) > 1]
+    if leaked:
+        raise ValueError(
+            f"{len(leaked)} normalized prompt groups cross split boundaries. "
+            "Remove cross-dataset duplicates before using this split."
+        )
     return BenchmarkSplit(
         train=train,
         validation=validation,
@@ -489,6 +566,51 @@ def _quality_retention_lcb(
     return float((fallback_score.mean() + lower_delta) / max(fallback_score.mean(), 1e-12))
 
 
+def _binomial_rate_ucl(events: np.ndarray, confidence: float) -> float:
+    """Wilson one-sided upper bound for a binary event rate."""
+
+    events = np.asarray(events, dtype=bool)
+    if len(events) == 0:
+        return 0.0
+    probability = float(events.mean())
+    z = NormalDist().inv_cdf(confidence)
+    z2_over_n = z * z / len(events)
+    center = (probability + z * z / (2 * len(events))) / (1 + z2_over_n)
+    margin = (
+        z
+        * np.sqrt(
+            probability * (1 - probability) / len(events)
+            + z * z / (4 * len(events) ** 2)
+        )
+        / (1 + z2_over_n)
+    )
+    return float(min(1.0, center + margin))
+
+
+def _macro_dataset_retention(
+    indices: np.ndarray,
+    selected_score: np.ndarray,
+    fallback_score: np.ndarray,
+    panel: BenchmarkPanel,
+    confidence: float,
+) -> tuple[float, float, int]:
+    """Macro-average retention so large datasets cannot hide small-dataset harm."""
+
+    labels = panel.examples.dataset.iloc[indices].to_numpy()
+    ratios = []
+    for dataset in np.unique(labels):
+        included = labels == dataset
+        fallback_mean = float(fallback_score[included].mean())
+        if fallback_mean > 1e-12:
+            ratios.append(float(selected_score[included].mean() / fallback_mean))
+    if not ratios:
+        return float("nan"), float("nan"), 0
+    values = np.asarray(ratios)
+    standard_error = 0.0 if len(values) < 2 else values.std(ddof=1) / np.sqrt(len(values))
+    lower = values.mean() - NormalDist().inv_cdf(confidence) * standard_error
+    return float(values.mean()), float(lower), len(values)
+
+
 def _route_metrics(
     indices: np.ndarray,
     choices: np.ndarray,
@@ -497,12 +619,21 @@ def _route_metrics(
     fallback_idx: int,
     confidence: float,
     overhead: float = 0.0,
+    quality_epsilon: float = 0.0,
 ) -> dict[str, float]:
     rows = np.arange(len(indices))
     selected_score = panel.score[indices][rows, choices]
     fallback_score = panel.score[indices, fallback_idx]
     selected_resource = resource[indices][rows, choices] + overhead
     fallback_resource = resource[indices, fallback_idx]
+    quality_lost = selected_score < fallback_score - quality_epsilon
+    routed = choices != fallback_idx
+    routed_safety_precision = (
+        float((~quality_lost[routed]).mean()) if routed.any() else 1.0
+    )
+    macro_retention, macro_lcb, macro_count = _macro_dataset_retention(
+        indices, selected_score, fallback_score, panel, confidence
+    )
     return {
         "quality": float(selected_score.mean()),
         "fallback_quality": float(fallback_score.mean()),
@@ -512,7 +643,13 @@ def _route_metrics(
         "quality_retention_lcb": _quality_retention_lcb(
             selected_score, fallback_score, confidence
         ),
-        "quality_loss_rate": float(np.mean(selected_score < fallback_score)),
+        "quality_loss_rate": float(quality_lost.mean()),
+        "quality_loss_rate_ucl": _binomial_rate_ucl(quality_lost, confidence),
+        "routed_safety_precision": routed_safety_precision,
+        "routed_fraction": float(routed.mean()),
+        "macro_dataset_quality_retention": macro_retention,
+        "macro_dataset_quality_retention_lcb": macro_lcb,
+        "macro_dataset_count": float(macro_count),
         "mean_resource": float(selected_resource.mean()),
         "fallback_resource": float(fallback_resource.mean()),
         "resource_savings": float(
@@ -545,6 +682,8 @@ def _candidate_diagnostics(
         oracle = np.where(safe, resource[indices], np.inf).argmin(axis=1)
         for model_idx, model_name in enumerate(panel.models):
             model_resource = resource[indices, model_idx]
+            candidate_score = panel.score[indices, model_idx]
+            equal_quality = np.isclose(candidate_score, fallback_quality)
             rows.append(
                 {
                     "split": split_name,
@@ -556,6 +695,19 @@ def _candidate_diagnostics(
                         model_resource.mean() / max(fallback_resource.mean(), 1e-12)
                     ),
                     "safe_rate": float(safe[:, model_idx].mean()),
+                    "candidate_better_rate": float(
+                        ((candidate_score > fallback_quality) & ~equal_quality).mean()
+                    ),
+                    "candidate_equal_rate": float(equal_quality.mean()),
+                    "candidate_worse_rate": float(
+                        ((candidate_score < fallback_quality) & ~equal_quality).mean()
+                    ),
+                    "both_zero_rate": float(
+                        (
+                            np.isclose(candidate_score, 0.0)
+                            & np.isclose(fallback_quality, 0.0)
+                        ).mean()
+                    ),
                     "faster_than_fallback_rate": float(
                         (model_resource < fallback_resource).mean()
                     ),
@@ -659,19 +811,8 @@ def run_public_benchmark(
     confidence: float = 0.95,
     quality_epsilon: float = 0.0,
     minimum_predicted_savings: float = 0.02,
-    threshold_grid: Iterable[float] = (
-        0.50,
-        0.60,
-        0.70,
-        0.75,
-        0.80,
-        0.85,
-        0.90,
-        0.925,
-        0.95,
-        0.975,
-        0.99,
-    ),
+    threshold_grid: Iterable[float] = DEFAULT_THRESHOLD_GRID,
+    validation_quality_margin: float = 0.0,
     router_overhead_s: float = 0.0,
     seed: int = 42,
     routing_probabilities: np.ndarray | None = None,
@@ -686,6 +827,8 @@ def run_public_benchmark(
         raise ValueError("Objective must be 'cost' or 'latency'.")
     if not 0.5 < confidence < 1.0:
         raise ValueError("confidence must be between 0.5 and 1.0.")
+    if validation_quality_margin < 0:
+        raise ValueError("validation_quality_margin cannot be negative.")
     resource = panel.cost if objective == "cost" else panel.latency
     overhead = router_overhead_s if objective == "latency" else 0.0
     fallback_idx = int(panel.score[split.train].mean(axis=0).argmax())
@@ -732,11 +875,13 @@ def run_public_benchmark(
             fallback_idx,
             confidence,
             overhead,
+            quality_epsilon,
         )
         search_rows.append({"threshold": float(threshold), **metrics})
     threshold_search = pd.DataFrame(search_rows)
+    validation_quality_target = minimum_quality_retention + validation_quality_margin
     feasible = threshold_search.loc[
-        threshold_search.quality_retention_lcb.ge(minimum_quality_retention)
+        threshold_search.quality_retention_lcb.ge(validation_quality_target)
         & threshold_search.resource_savings.gt(0)
     ]
     if feasible.empty:
@@ -786,6 +931,7 @@ def run_public_benchmark(
                 fallback_idx,
                 confidence,
                 strategy_overhead,
+                quality_epsilon,
             )
             for name, (choices, strategy_overhead) in strategies.items()
         }
@@ -798,12 +944,68 @@ def run_public_benchmark(
     summary["oracle_savings_capture"] = (
         summary.resource_savings / oracle_savings if oracle_savings > 0 else np.nan
     )
+    per_dataset_rows = []
+    test_dataset = panel.examples.dataset.iloc[split.test].to_numpy()
+    for strategy_name, (choices, strategy_overhead) in strategies.items():
+        for dataset in np.unique(test_dataset):
+            included = test_dataset == dataset
+            dataset_indices = split.test[included]
+            dataset_choices = choices[included]
+            per_dataset_rows.append(
+                {
+                    "strategy": strategy_name,
+                    "dataset": dataset,
+                    "prompts": int(included.sum()),
+                    **_route_metrics(
+                        dataset_indices,
+                        dataset_choices,
+                        panel,
+                        resource,
+                        fallback_idx,
+                        confidence,
+                        strategy_overhead,
+                        quality_epsilon,
+                    ),
+                }
+            )
+    per_dataset_metrics = pd.DataFrame(per_dataset_rows)
 
     router_metrics = summary.loc[router_name]
+    if objective == "latency":
+        overhead_values_s = np.unique(
+            np.array([overhead, 0.010, 0.020, 0.050], dtype=float)
+        )
+        if router_active:
+            gross_saved_s = float(
+                router_metrics.fallback_resource
+                - (router_metrics.mean_resource - overhead)
+            )
+            net_savings = (
+                gross_saved_s - overhead_values_s
+            ) / router_metrics.fallback_resource
+        else:
+            gross_saved_s = 0.0
+            net_savings = np.zeros_like(overhead_values_s)
+        router_overhead_sensitivity = pd.DataFrame(
+            {
+                "router_overhead_ms": overhead_values_s * 1_000,
+                "net_latency_savings": net_savings,
+                "break_even_router_overhead_ms": gross_saved_s * 1_000,
+            }
+        )
+    else:
+        router_overhead_sensitivity = pd.DataFrame(
+            columns=(
+                "router_overhead_ms",
+                "net_latency_savings",
+                "break_even_router_overhead_ms",
+            )
+        )
     failure_reasons = []
     if not router_active:
         failure_reasons.append(
-            "No validation threshold met both the quality LCB and net-savings gates."
+            "No validation threshold met both the buffered quality LCB target "
+            f"({validation_quality_target:.3f}) and net-savings gate."
         )
     if router_metrics.quality_retention_lcb < minimum_quality_retention:
         failure_reasons.append("Sealed-test quality retention missed its LCB gate.")
@@ -821,6 +1023,10 @@ def run_public_benchmark(
     decisions["router_active"] = router_active
     decisions["selected_quality"] = panel.score[split.test][rows, selected_test]
     decisions["fallback_quality"] = panel.score[split.test, fallback_idx]
+    decisions["quality_delta"] = (
+        decisions.selected_quality - decisions.fallback_quality
+    )
+    decisions["quality_lost"] = decisions.quality_delta < -quality_epsilon
     decisions["selected_resource"] = resource[split.test][rows, selected_test]
     decisions["fallback_resource"] = resource[split.test, fallback_idx]
     decisions["selected_routing_probability"] = probability[split.test][
@@ -840,10 +1046,13 @@ def run_public_benchmark(
         threshold_search=threshold_search,
         decisions=decisions,
         candidate_diagnostics=candidate_diagnostics,
+        per_dataset_metrics=per_dataset_metrics,
+        router_overhead_sensitivity=router_overhead_sensitivity,
         poc_passed=poc_passed,
         failure_reasons=tuple(failure_reasons),
         minimum_quality_retention=minimum_quality_retention,
         confidence=confidence,
+        validation_quality_margin=validation_quality_margin,
         router_name=router_name,
     )
 
@@ -862,15 +1071,27 @@ def export_public_benchmark(
     result.candidate_diagnostics.to_csv(
         output_dir / "candidate_diagnostics.csv", index=False
     )
+    result.per_dataset_metrics.to_csv(
+        output_dir / "per_dataset_metrics.csv", index=False
+    )
+    result.router_overhead_sensitivity.to_csv(
+        output_dir / "test_router_overhead_sensitivity.csv", index=False
+    )
     manifest = {
-        "schema_version": 2,
+        "schema_version": 3,
         "poc_passed": result.poc_passed,
         "failure_reasons": result.failure_reasons,
         "success_criteria": {
             "minimum_quality_retention": result.minimum_quality_retention,
+            "validation_quality_margin": result.validation_quality_margin,
+            "validation_quality_target": (
+                result.minimum_quality_retention + result.validation_quality_margin
+            ),
             "one_sided_confidence": result.confidence,
             "requires_positive_net_resource_savings": True,
             "requires_nontrivial_routing": True,
+            "reports_macro_dataset_retention": True,
+            "reports_quality_loss_rate_ucl": True,
         },
         "objective": result.objective,
         "router_name": result.router_name,
@@ -879,6 +1100,7 @@ def export_public_benchmark(
         "router_active": result.router_active,
         "split": {
             "mode": result.split.mode,
+            "random_grouping": "normalized_prompt_sha256",
             "train_datasets": result.split.train_datasets,
             "validation_datasets": result.split.validation_datasets,
             "test_datasets": result.split.test_datasets,

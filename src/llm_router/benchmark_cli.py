@@ -59,6 +59,18 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--epochs", type=int, default=5)
     parser.add_argument("--batch-size", type=int, default=8)
     parser.add_argument("--learning-rate", type=float, default=1e-4)
+    parser.add_argument("--head-learning-rate", type=float, default=2e-4)
+    parser.add_argument("--minimum-epochs", type=int, default=2)
+    parser.add_argument("--early-stopping-patience", type=int, default=2)
+    parser.add_argument(
+        "--validation-quality-margin",
+        type=float,
+        default=0.01,
+        help=(
+            "Extra validation LCB margin above the sealed-test quality gate. "
+            "For example, 0.01 selects at 99%% before testing against 98%%."
+        ),
+    )
     parser.add_argument("--device", help="Optional torch device, e.g. cuda or cpu.")
     parser.add_argument("--output-dir", default="reports_benchmark")
     return parser
@@ -104,6 +116,9 @@ def main(argv: list[str] | None = None) -> int:
             epochs=args.epochs,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
+            head_learning_rate=args.head_learning_rate,
+            minimum_epochs=args.minimum_epochs,
+            early_stopping_patience=args.early_stopping_patience,
             device=args.device,
         )
         probabilities = training.safety_probabilities
@@ -114,6 +129,7 @@ def main(argv: list[str] | None = None) -> int:
         objective=args.objective,
         minimum_quality_retention=args.minimum_quality_retention,
         confidence=args.confidence,
+        validation_quality_margin=args.validation_quality_margin,
         router_overhead_s=scenario.router_overhead_s,
         seed=args.seed,
         routing_probabilities=probabilities,
@@ -131,6 +147,7 @@ def main(argv: list[str] | None = None) -> int:
             router_active=result.router_active,
             poc_passed=result.poc_passed,
             failure_reasons=result.failure_reasons,
+            validation_quality_margin=args.validation_quality_margin,
             config=router_config,
         )
     print(result.summary.to_string())
