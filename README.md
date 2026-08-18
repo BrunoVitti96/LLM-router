@@ -88,21 +88,57 @@ $$
 
 and net analytical latency savings remain positive after router overhead.
 
-## Training target, loss, and oracle
+## LOSS
 
-For each non-fallback candidate:
+The router does **not** estimate absolute answer quality, latency, or the final
+model choice. For each non-fallback candidate, it estimates the probability
+that the candidate is a safe replacement for the strongest model selected on
+the training split:
+
+$$
+\widehat P_m(\text{safe}\mid x)
+=P\!\left(Q_m(x)\ge Q_f(x)-\epsilon_q
+\mid\text{prompt text, prompt-token count}\right).
+$$
+
+Here, $Q_m(x)$ is candidate $m$'s recorded benchmark quality and $Q_f(x)$ is
+the fallback's quality. The binary training target is:
 
 $$
 y_m(x)=\mathbf 1[Q_m(x)\ge Q_f(x)-\epsilon_q].
 $$
+
+Thus, $y_m=1$ means the candidate preserved fallback-relative quality, while
+$y_m=0$ means that routing to it would lose more than the allowed tolerance.
+The default is $\epsilon_q=0$, so the candidate must match or exceed the
+fallback's recorded score. These are independent binary labels: with more than
+one alternative, several candidates may be safe for the same prompt.
+
+### Safety loss
 
 The safety loss uses independent binary cross-entropy with a per-candidate
 positive weight $N_{unsafe}/N_{safe}$, clipped to `[0.10, 10.0]`:
 
 $$
 \mathcal L_{safety}=\frac{1}{N(M-1)}
-\sum_{x,m}\operatorname{BCEWithLogits}(s_m(x),y_m(x);w_m).
+\sum_{x,m}\left[-w_my_m\log p_m-(1-y_m)\log(1-p_m)\right],
+\qquad p_m=\sigma(s_m).
 $$
+
+For example, suppose Fin-R1 is safe on 20 of 100 training prompts. Its positive
+weight is:
+
+$$
+w_{Fin}=\frac{80\text{ unsafe}}{20\text{ safe}}=4.
+$$
+
+If a safe prompt receives predicted probability $p=0.8$, its unweighted BCE is
+$-\log(0.8)=0.223$. After class balancing, its contribution is
+$4\times0.223=0.892$. This prevents the model from obtaining a deceptively low
+loss by predicting "unsafe" for nearly every prompt when safe replacements are
+rare.
+
+### Training-only oracle loss
 
 The hindsight oracle can see recorded outcomes and chooses the fastest model
 that preserves fallback-relative quality:
@@ -121,12 +157,51 @@ $$
 +4\sum_m p_m d_m+\sum_m p_m r_m.
 $$
 
+Here, $g_o=(L_f-L_o)/L_f$ is the non-negative latency opportunity available
+from the oracle choice, $d_m=\max(Q_f-Q_m-\epsilon_q,0)$ is quality drop, and
+$r_m=\max((L_m-L_o)/L_f,0)$ is normalized latency regret. The factor 4 makes
+probability assigned to a quality-losing model more expensive than probability
+assigned to a merely slower model.
+
+For a numerical example, suppose Fin-R1 and the Qwen fallback both score 1 on a
+prompt, but their analytical latencies are 0.70 s and 1.00 s. Fin-R1 is the
+oracle and the available speedup is $g_o=(1.00-0.70)/1.00=0.30$. If the oracle
+head assigns probabilities `[0.8, 0.2]` to `[Fin-R1, Qwen]`, then:
+
+$$
+\begin{aligned}
+\text{oracle imitation} &=1.30[-\log(0.8)]=0.290,\\
+\text{quality risk} &=0,\\
+\text{latency regret} &=0.2\frac{1.00-0.70}{1.00}=0.060,\\
+\mathcal L_{oracle} &=0.290+0+0.060=0.350.
+\end{aligned}
+$$
+
+If Fin-R1 instead scored 0 while Qwen scored 1, Fin-R1 would be unsafe and the
+oracle would choose Qwen despite its higher latency. Assigning probability to
+Fin-R1 would then incur the quality-risk penalty, illustrating that preserving
+quality takes priority over saving latency.
+
+### Complete training loss
+
 The complete objective is:
 
 $$
 \boxed{\mathcal L_{train}=\mathcal L_{safety}
 +0.25\mathcal L_{oracle}}.
 $$
+
+Continuing the safe-prompt example and assuming its candidate class weight is
+$w_m=1$, the safety loss is $0.223$ and:
+
+$$
+\mathcal L_{train}=0.223+0.25(0.350)=0.3105\approx0.311.
+$$
+
+The safety head is the deployed prediction. The oracle head only shapes the
+shared ModernBERT representation during training and is not consulted by the
+production selector. The loss is therefore a differentiable training proxy for
+the real objective: minimize latency subject to preserving fallback quality.
 
 After checkpoint selection, each candidate receives a Platt scaler. Validation
 rows use out-of-fold calibrated probabilities during threshold selection, so an
