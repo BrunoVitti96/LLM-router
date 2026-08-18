@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 from pathlib import Path
 
+from llm_router.config import DEFAULT_CONFIG
 from llm_router.public_benchmark import (
     EconomicsScenario,
     benchmark_inventory,
@@ -43,7 +45,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--objective", choices=("cost", "latency"), default="latency"
     )
     parser.add_argument(
-        "--split-mode", choices=("random", "dataset_ood"), default="dataset_ood"
+        "--split-mode", choices=("random", "dataset_ood"), default="random"
     )
     parser.add_argument("--minimum-quality-retention", type=float, default=0.98)
     parser.add_argument("--confidence", type=float, default=0.95)
@@ -91,12 +93,14 @@ def main(argv: list[str] | None = None) -> int:
     probabilities = None
     router_name = "tfidf_safety_router"
     training = None
+    router_config = replace(DEFAULT_CONFIG, seed=args.seed)
     if args.router == "modernbert-hybrid":
         from llm_router.modernbert_poc import train_modernbert_hybrid_poc
 
         training = train_modernbert_hybrid_poc(
             panel,
             split,
+            config=router_config,
             epochs=args.epochs,
             batch_size=args.batch_size,
             learning_rate=args.learning_rate,
@@ -125,13 +129,21 @@ def main(argv: list[str] | None = None) -> int:
             output_dir / "modernbert_router",
             selected_threshold=result.selected_threshold,
             router_active=result.router_active,
+            poc_passed=result.poc_passed,
+            failure_reasons=result.failure_reasons,
+            config=router_config,
         )
     print(result.summary.to_string())
     print(
         f"\nrouter_active={result.router_active} "
+        f"poc_passed={result.poc_passed} "
         f"threshold={result.selected_threshold:g} "
         f"fallback={result.fallback_model}"
     )
+    if result.failure_reasons:
+        print("Failure reasons:")
+        for reason in result.failure_reasons:
+            print(f"- {reason}")
     print(f"Reports written to {output_dir.resolve()}")
     return 0
 

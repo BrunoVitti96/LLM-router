@@ -139,6 +139,11 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
         panel, split, epochs=1, batch_size=2, device="cpu"
     )
     assert result.safety_probabilities.shape == panel.score.shape
+    assert result.raw_safety_probabilities.shape == panel.score.shape
+    assert result.safety_logits.shape == (len(panel.examples), 1)
+    assert set(result.calibration_parameters) == {"fast"}
+    assert result.calibration_diagnostics.candidate.tolist() == ["fast"]
+    assert set(result.safety_pos_weights) == {"fast"}
     assert np.allclose(
         result.safety_probabilities[:, result.fallback_index], 1.0
     )
@@ -147,3 +152,4 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
         & (result.safety_probabilities <= 1)
     )
     assert len(result.history) == 1
+    assert result.history.skipped_optimizer_steps.iloc[0] == 0

@@ -110,6 +110,7 @@ def hybrid_routing_loss(
     quality_epsilon: float = 0.0,
     safety_loss_weight: float = 1.0,
     oracle_auxiliary_weight: float = 0.25,
+    safety_pos_weight: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, dict[str, torch.Tensor]]:
     """Optimize deployable safety estimates plus auxiliary oracle imitation.
 
@@ -129,7 +130,7 @@ def hybrid_routing_loss(
         quality[:, nonfallback_indices] >= fallback_quality - quality_epsilon
     ).float()
     safety_loss = F.binary_cross_entropy_with_logits(
-        safety_logits.float(), safety_target
+        safety_logits.float(), safety_target, pos_weight=safety_pos_weight
     )
     oracle_loss, oracle_parts = oracle_routing_loss(
         oracle_logits,

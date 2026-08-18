@@ -6,6 +6,7 @@ from llm_router.public_benchmark import (
     EconomicsScenario,
     ModelProfile,
     benchmark_inventory,
+    export_public_benchmark,
     load_llmrouterbench,
     make_complete_panel,
     run_public_benchmark,
@@ -119,6 +120,29 @@ def test_dataset_ood_split_is_disjoint(tmp_path):
     assert len(split.train) + len(split.validation) + len(split.test) == 45
 
 
+def test_export_records_explicit_poc_status_and_candidate_diagnostics(tmp_path):
+    records = load_llmrouterbench(synthetic_release(tmp_path), models=MODELS)
+    panel = make_complete_panel(simulate_economics(records, scenario()), MODELS)
+    split = split_benchmark(panel, mode="random", seed=42)
+    result = run_public_benchmark(
+        panel,
+        split,
+        objective="latency",
+        minimum_quality_retention=1.1,
+        router_overhead_s=scenario().router_overhead_s,
+    )
+
+    output = export_public_benchmark(result, scenario(), tmp_path / "report")
+    manifest = json.loads(
+        (output / "experiment_manifest.json").read_text(encoding="utf-8")
+    )
+
+    assert not manifest["poc_passed"]
+    assert manifest["failure_reasons"]
+    assert manifest["success_criteria"]["requires_nontrivial_routing"]
+    assert (output / "candidate_diagnostics.csv").is_file()
+
+
 def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
     records = load_llmrouterbench(synthetic_release(tmp_path), models=MODELS)
     panel = make_complete_panel(simulate_economics(records, scenario()), MODELS)
@@ -131,10 +155,18 @@ def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
         router_overhead_s=scenario().router_overhead_s,
     )
     assert not result.router_active
+    assert not result.poc_passed
+    assert result.failure_reasons
     assert result.fallback_model == "strong"
     assert result.summary.loc["outcome_oracle", "resource_savings"] > 0
     assert result.summary.loc["tfidf_safety_router", "fallback_usage"] == 1.0
     assert len(result.decisions) == len(split.test)
+    assert set(result.candidate_diagnostics.split) == {
+        "train",
+        "validation",
+        "test",
+    }
+    assert result.summary.loc["outcome_oracle", "oracle_savings_capture"] == 1.0
 
     permissive = run_public_benchmark(
         panel,

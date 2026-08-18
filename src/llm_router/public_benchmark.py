@@ -169,6 +169,11 @@ class PublicBenchmarkResult:
     summary: pd.DataFrame
     threshold_search: pd.DataFrame
     decisions: pd.DataFrame
+    candidate_diagnostics: pd.DataFrame
+    poc_passed: bool
+    failure_reasons: tuple[str, ...]
+    minimum_quality_retention: float
+    confidence: float
     router_name: str = "tfidf_safety_router"
 
 
@@ -517,6 +522,49 @@ def _route_metrics(
     }
 
 
+def _candidate_diagnostics(
+    panel: BenchmarkPanel,
+    split: BenchmarkSplit,
+    resource: np.ndarray,
+    fallback_idx: int,
+    quality_epsilon: float,
+) -> pd.DataFrame:
+    rows = []
+    split_indices = {
+        "train": split.train,
+        "validation": split.validation,
+        "test": split.test,
+    }
+    for split_name, indices in split_indices.items():
+        fallback_quality = panel.score[indices, fallback_idx]
+        fallback_resource = resource[indices, fallback_idx]
+        safe = panel.score[indices] >= (
+            fallback_quality[:, None] - quality_epsilon
+        )
+        safe[:, fallback_idx] = True
+        oracle = np.where(safe, resource[indices], np.inf).argmin(axis=1)
+        for model_idx, model_name in enumerate(panel.models):
+            model_resource = resource[indices, model_idx]
+            rows.append(
+                {
+                    "split": split_name,
+                    "model": model_name,
+                    "is_fallback": model_idx == fallback_idx,
+                    "mean_quality": float(panel.score[indices, model_idx].mean()),
+                    "mean_resource": float(model_resource.mean()),
+                    "relative_resource_vs_fallback": float(
+                        model_resource.mean() / max(fallback_resource.mean(), 1e-12)
+                    ),
+                    "safe_rate": float(safe[:, model_idx].mean()),
+                    "faster_than_fallback_rate": float(
+                        (model_resource < fallback_resource).mean()
+                    ),
+                    "oracle_selection_rate": float((oracle == model_idx).mean()),
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def _fit_safety_probabilities(
     panel: BenchmarkPanel,
     split: BenchmarkSplit,
@@ -611,7 +659,19 @@ def run_public_benchmark(
     confidence: float = 0.95,
     quality_epsilon: float = 0.0,
     minimum_predicted_savings: float = 0.02,
-    threshold_grid: Iterable[float] = (0.5, 0.6, 0.7, 0.8, 0.9, 0.95),
+    threshold_grid: Iterable[float] = (
+        0.50,
+        0.60,
+        0.70,
+        0.75,
+        0.80,
+        0.85,
+        0.90,
+        0.925,
+        0.95,
+        0.975,
+        0.99,
+    ),
     router_overhead_s: float = 0.0,
     seed: int = 42,
     routing_probabilities: np.ndarray | None = None,
@@ -734,6 +794,24 @@ def run_public_benchmark(
     summary.insert(1, "selected_model", "dynamic")
     summary.loc["best_single", "selected_model"] = fallback_model
     summary.loc["cheapest_single", "selected_model"] = panel.models[cheapest_single_idx]
+    oracle_savings = float(summary.loc["outcome_oracle", "resource_savings"])
+    summary["oracle_savings_capture"] = (
+        summary.resource_savings / oracle_savings if oracle_savings > 0 else np.nan
+    )
+
+    router_metrics = summary.loc[router_name]
+    failure_reasons = []
+    if not router_active:
+        failure_reasons.append(
+            "No validation threshold met both the quality LCB and net-savings gates."
+        )
+    if router_metrics.quality_retention_lcb < minimum_quality_retention:
+        failure_reasons.append("Sealed-test quality retention missed its LCB gate.")
+    if router_metrics.resource_savings <= 0:
+        failure_reasons.append("Sealed-test net analytical savings were not positive.")
+    if router_metrics.fallback_usage >= 1.0 - 1e-12:
+        failure_reasons.append("The sealed-test policy routed every prompt to fallback.")
+    poc_passed = not failure_reasons
 
     selected_test = router_choices[split.test]
     rows = np.arange(len(split.test))
@@ -748,6 +826,9 @@ def run_public_benchmark(
     decisions["selected_routing_probability"] = probability[split.test][
         rows, selected_test
     ]
+    candidate_diagnostics = _candidate_diagnostics(
+        panel, split, resource, fallback_idx, quality_epsilon
+    )
 
     return PublicBenchmarkResult(
         objective=objective,
@@ -758,6 +839,11 @@ def run_public_benchmark(
         summary=summary,
         threshold_search=threshold_search,
         decisions=decisions,
+        candidate_diagnostics=candidate_diagnostics,
+        poc_passed=poc_passed,
+        failure_reasons=tuple(failure_reasons),
+        minimum_quality_retention=minimum_quality_retention,
+        confidence=confidence,
         router_name=router_name,
     )
 
@@ -773,8 +859,19 @@ def export_public_benchmark(
     result.summary.to_csv(output_dir / "strategy_summary.csv")
     result.threshold_search.to_csv(output_dir / "threshold_search.csv", index=False)
     result.decisions.to_parquet(output_dir / "test_decisions.parquet", index=False)
+    result.candidate_diagnostics.to_csv(
+        output_dir / "candidate_diagnostics.csv", index=False
+    )
     manifest = {
-        "schema_version": 1,
+        "schema_version": 2,
+        "poc_passed": result.poc_passed,
+        "failure_reasons": result.failure_reasons,
+        "success_criteria": {
+            "minimum_quality_retention": result.minimum_quality_retention,
+            "one_sided_confidence": result.confidence,
+            "requires_positive_net_resource_savings": True,
+            "requires_nontrivial_routing": True,
+        },
         "objective": result.objective,
         "router_name": result.router_name,
         "fallback_model": result.fallback_model,
