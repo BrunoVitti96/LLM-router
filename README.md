@@ -14,96 +14,29 @@ loaded or timed to construct latency labels.
 The project is an analytical-latency feasibility experiment, not a claim about
 measured production latency.
 
-## What changed after the first trained run
+The README is the current specification. Development history, earlier results,
+and the reasons behind policy changes are kept in [`audits.md`](audits.md).
 
-The first dataset-OOD run completed correctly but routed every sealed-test
-prompt to Qwen3-8B. The outcome oracle showed about 4.9% analytical headroom,
-so the pipeline and safety guard worked while the learned router did not.
+## Project in one minute
 
-That evidence led to five concrete changes:
+In plain language, the router asks: "Can the faster model answer this prompt
+without doing worse than the trusted fallback?" If its calibrated confidence is
+high enough and the analytical latency model predicts at least a 2% speedup, it
+uses the fastest eligible alternative. Otherwise it safely uses the fallback.
 
-1. random-split feasibility is now the first experiment; dataset-OOD is a
-   separate generalization stress test;
-2. safety BCE is class-balanced instead of learning the majority safe rate;
-3. safety logits receive per-candidate Platt calibration, with out-of-fold
-   probabilities used for validation threshold selection;
-4. exact dataset identifiers were removed from ModernBERT inputs; and
-5. the default panel removed a 9B candidate that was slower than the fallback
-   and had a 0% oracle-selection rate.
+Technically, ModernBERT predicts a separate fallback-relative safety probability
+for every non-fallback candidate. The selector combines those probabilities with
+analytical latency estimates, then freezes its threshold on validation data
+before it opens the sealed test set. The test is successful only if conservative
+quality, subgroup, harm, calibration, and latency-overhead gates all pass.
 
-The mixed-precision loop also avoids advancing the learning-rate scheduler when
-`GradScaler` skips an optimizer step.
-
-## What changed after the first successful random-split run
-
-Seed 42 routed 20.77% of 2,807 sealed-test prompts to Fin-R1. It retained
-99.55% of fallback quality, with a one-sided 95% lower confidence bound of
-98.75%, and saved 2.33% analytical latency after the assumed 4 ms router
-overhead. This is a successful single-run feasibility result, not yet a
-multi-seed or dataset-OOD claim.
-
-The result exposed several places where a seemingly good aggregate number
-could still be misleading. The next iteration therefore adds:
-
-1. normalized prompt-content hashes and stratified group splitting, so a
-   repeated question cannot cross random train, validation, and test under
-   different benchmark IDs;
-2. a 1 percentage-point validation safety margin: validation must reach a 99%
-   quality-retention LCB before the sealed 98% test gate is opened;
-3. a dense threshold grid from 0.85 through 0.95 in 0.005 increments;
-4. per-dataset retention, a one-sided Wilson upper bound on quality-loss rate,
-   and safety precision among non-fallback routes;
-5. exact ModernBERT-tokenizer truncation diagnostics;
-6. separate learning rates for LoRA and the new heads, plus validation early
-   stopping; and
-7. router-overhead sensitivity and a break-even-overhead calculation.
-
-For a numerical example, the successful run saved about 48.7 ms per prompt
-before router overhead. With the assumed 4 ms router cost, net savings were
-44.7 ms. A real 20 ms router cost would reduce the same frozen policy to about
-28.7 ms of savings, while an overhead near 48.7 ms would erase the benefit.
-
-## What changed after the completed seed-42 review
-
-The completed seed-42 notebook remains a useful historical baseline: it routed
-634 of 2,812 test prompts, gained 54 answers, lost 48, and finished six correct
-answers ahead of fallback. However, 20 of those net gains came from MBPP while
-ARC-Challenge, FinQA, and GPQA lost 6, 5, and 2 answers respectively. Aggregate
-quality therefore hid task-mix sensitivity.
-
-New runs use a stricter schema-v4 policy contract. In plain language, a router
-must now be safe overall, avoid large benchmark-group regressions, keep its
-harm uncertainty controlled, and remain useful when routing takes longer than
-the optimistic estimate. The notebook predeclares these additional gates:
-
-- macro-dataset quality-retention LCB at least 98%;
-- quality-loss-rate one-sided 95% UCL at most 2.5%;
-- routed-safety-precision one-sided 95% LCB at least 90%;
-- worst quality-retention LCB at least 90% among datasets with at least 100
-  evaluation prompts; and
-- positive analytical savings at both the nominal 4 ms and conservative 20 ms
-  router overheads.
-
-The 100-prompt rule keeps an 11-example dataset from controlling the entire
-experiment through a very wide confidence interval. It is a catastrophic-harm
-floor, not a replacement for the stricter 98% aggregate and macro gates. For
-example, a 92% routed-safety point estimate with an 89% lower bound now fails,
-even though the point estimate alone looks acceptable.
-
-Because the guarded value is the worst of several eligible datasets, its
-per-dataset confidence bounds use a Bonferroni adjustment. With ten guarded
-datasets and 95% desired family-wise confidence, each one-sided bound is
-calculated at $1-(1-0.95)/10=99.5\%$. This is deliberately more conservative
-than taking the smallest of ten ordinary 95% bounds.
-
-Reports now include the Wilson lower bound on routed safety precision,
-safe-opportunity recall, conservative-overhead savings, worst guarded-dataset
-retention, every candidate's calibrated safety probability, and per-prompt
-ModernBERT token length and truncation status. Calibration diagnostics also
-include the constant-prior Brier baseline, Brier skill, ROC AUC, and safe and
-unsafe average precision. The saved seed-42 artifact remains schema v3; reruns
-with the updated code produce schema v4 and must not be compared as if the
-pass/fail contracts were identical.
+For a simplified numerical example, suppose the fallback answers 80 of 100
+prompts correctly. A routed policy answers 79 correctly, so its point-estimate
+quality retention is $79/80=98.75\%$. That point estimate alone is insufficient:
+the one-sided 95% lower confidence bound must also clear the predeclared 98%
+test gate. If faster routing saves 50 ms per prompt before routing cost and the
+router costs 4 ms, net analytical savings are $50-4=46$ ms per prompt. The
+policy must satisfy both the quality and latency requirements.
 
 ## Routing logic
 
@@ -164,10 +97,10 @@ $$
 \operatorname{LCB}_{95\%,validation}\ge 0.98+\gamma=0.99.
 $$
 
-The sealed-test pass criterion remains 0.98. The margin is not added to the test
+The sealed-test pass criterion is 0.98. The margin is not added to the test
 after results are seen; it is a predeclared guard against validation optimism.
 
-Schema-v4 threshold selection additionally requires:
+The current threshold-selection contract additionally requires:
 
 $$
 \begin{aligned}
@@ -182,7 +115,24 @@ Net analytical savings must also stay positive when router overhead is replaced
 by the conservative 20 ms assumption. These are configurable command-line and
 Python parameters, but their chosen values must be frozen before opening test.
 
-## LOSS
+## Loss: what the router learns
+
+### Plain-language intuition
+
+The router is trained as a safety judge, not as an answer generator. For every
+faster candidate, it learns whether choosing that candidate would preserve the
+fallback's recorded quality. A separate training-only oracle teaches the shared
+representation which safe choice would have been fastest, but that oracle is
+never available when routing a new prompt.
+
+For example, if the fallback scores 1 and Fin-R1 scores 0, Fin-R1 receives an
+unsafe label of 0. If both score 1, it receives a safe label of 1. If both score
+0, it also receives a safe label under the default fallback-relative definition:
+the replacement did not make the fallback's result worse, even though neither
+model answered correctly. This distinction is why the loss estimates safe
+replacement rather than absolute correctness.
+
+### Technical definition
 
 The router does **not** estimate absolute answer quality, latency, or the final
 model choice. For each non-fallback candidate, it estimates the probability
@@ -298,10 +248,11 @@ production selector. The loss is therefore a differentiable training proxy for
 the real objective: minimize latency subject to preserving fallback quality.
 
 The LoRA adapter uses learning rate $10^{-4}$ while the randomly initialized
-heads use $2\times10^{-4}$. Training can run for at most eight epochs, but stops
+heads use $2\times10^{-4}$. Notebook training can run for at most eight epochs,
+but stops
 after two consecutive non-improving validation epochs once at least two epochs
-have completed. This responds to the seed-42 history, where validation loss was
-best at epoch 2 even though training loss continued to fall through epoch 5.
+have completed. The command-line default is five maximum epochs with the same
+minimum-epoch and patience settings.
 
 After checkpoint selection, each candidate receives a Platt scaler. Validation
 rows use out-of-fold calibrated probabilities during threshold selection, so an
@@ -342,13 +293,6 @@ The clean default uses two benchmark candidates:
 
 Qwen's official model card reports 8.2B parameters:
 [`Qwen/Qwen3-8B`](https://huggingface.co/Qwen/Qwen3-8B).
-
-The previous Nemotron candidate was removed from the default because it was
-analytically slower than the Qwen fallback and therefore could never win the
-latency oracle. NVIDIA also documents it as a Mamba-2/Transformer hybrid, which
-needs a separate architecture sensitivity assumption rather than being treated
-as an ordinary dense Transformer:
-[`nvidia/NVIDIA-Nemotron-Nano-9B-v2`](https://huggingface.co/nvidia/NVIDIA-Nemotron-Nano-9B-v2).
 
 The public benchmark pool contains no diffusion model. Do not relabel an
 autoregressive candidate as diffusion. Add a diffusion candidate only when its
@@ -421,8 +365,9 @@ The report directory contains:
 - `modernbert_router/input_diagnostics.json`;
 - exported Platt parameters, LoRA adapter, heads, tokenizer, and router manifest.
 
-Schema-v4 `test_decisions.parquet` also stores `safety_probability__<model>` for
-every candidate plus `router_input_tokens` and `router_was_truncated`. Thus, if
+The current `test_decisions.parquet` schema also stores
+`safety_probability__<model>` for every candidate plus `router_input_tokens`
+and `router_was_truncated`. Thus, if
 48 routes are harmful, the report can show whether they were high-confidence
 errors or disproportionately truncated prompts. `strategy_summary.csv` and
 `threshold_search.csv` add routed-precision LCB, safe-opportunity recall,
@@ -493,6 +438,9 @@ hardware study. That is different from timing every candidate for every prompt.
 ## Repository layout
 
 ```text
+README.md                                   # current project specification
+audits.md                                   # historical runs and design changes
+
 notebooks/
 ├── 01_train_modernbert_router.ipynb       # historical measured-latency run
 └── 02_train_modernbert_hybrid_poc.ipynb   # recommended calibrated Colab POC
