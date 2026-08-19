@@ -1,0 +1,65 @@
+{
+  "schema_version": 3,
+  "router": "ModernBERT hybrid safety router",
+  "deployed_prediction": "fallback-relative replacement safety",
+  "oracle_role": "training-only auxiliary loss",
+  "encoder_repo": "nomic-ai/modernbert-embed-base",
+  "encoder_revision": "d556a88e332558790b210f7bdbe87da2fa94a8d8",
+  "router_max_input_tokens": 512,
+  "model_names": [
+    "Fin-R1",
+    "Qwen3-8B"
+  ],
+  "fallback_model": "Qwen3-8B",
+  "nonfallback_models": [
+    "Fin-R1"
+  ],
+  "input_features": "prompt text and prompt-token count; no dataset identifier",
+  "safety_definition": "candidate_quality >= fallback_quality - epsilon",
+  "loss": {
+    "safety_bce_weight": 1.0,
+    "safety_positive_weights": {
+      "Fin-R1": 0.30135929584503174
+    },
+    "oracle_auxiliary_weight": 0.25
+  },
+  "selected_safety_threshold": 0.885,
+  "calibration": {
+    "method": "per-candidate Platt scaling",
+    "validation_probabilities": "out-of-fold",
+    "deployment_parameters": {
+      "Fin-R1": {
+        "slope": 0.6712786555290222,
+        "intercept": 0.9209557771682739
+      }
+    }
+  },
+  "minimum_predicted_savings": 0.02,
+  "validation_quality_margin": 0.01,
+  "validation_router_active": true,
+  "poc_passed": true,
+  "failure_reasons": [],
+  "router_active": true,
+  "deployment_enabled": true,
+  "latency_source": "analytical_model_profile_and_prompt_tokens",
+  "candidate_inference_used_for_latency": false,
+  "optimization": {
+    "encoder_learning_rate": 0.0001,
+    "head_learning_rate": 0.0002,
+    "minimum_epochs": 2,
+    "early_stopping_patience": 2,
+    "best_epoch": 3,
+    "epochs_completed": 5,
+    "stopped_early": true
+  },
+  "input_diagnostics": {
+    "examples": 14041,
+    "max_input_tokens": 512,
+    "truncated_examples": 474,
+    "truncation_rate": 0.03375827932483441,
+    "router_tokens_p50": 85.0,
+    "router_tokens_p95": 463.0,
+    "router_tokens_max": 1408
+  },
+  "training_seconds": 1940.3055962990002
+}
