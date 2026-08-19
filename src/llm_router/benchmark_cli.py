@@ -41,9 +41,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--scenario", help="Path to a dated economics JSON file.")
     parser.add_argument("--models", help="Comma-separated model directory names.")
     parser.add_argument("--datasets", help="Optional comma-separated datasets.")
-    parser.add_argument(
-        "--objective", choices=("cost", "latency"), default="latency"
-    )
+    parser.add_argument("--objective", choices=("cost", "latency"), default="latency")
     parser.add_argument(
         "--split-mode", choices=("random", "dataset_ood"), default="random"
     )
@@ -62,6 +60,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--head-learning-rate", type=float, default=2e-4)
     parser.add_argument("--minimum-epochs", type=int, default=2)
     parser.add_argument("--early-stopping-patience", type=int, default=2)
+    parser.add_argument(
+        "--dataset-balanced-sampling",
+        action="store_true",
+        help=(
+            "Sample each training dataset with equal expected probability. "
+            "Use for a predeclared ablation, not after inspecting test results."
+        ),
+    )
     parser.add_argument(
         "--validation-quality-margin",
         type=float,
@@ -102,6 +108,15 @@ def build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_CONFIG.conservative_router_overhead_s * 1_000,
         help="Router overhead that must still leave positive analytical savings.",
     )
+    parser.add_argument(
+        "--minimum-consecutive-feasible-thresholds",
+        type=int,
+        default=DEFAULT_CONFIG.minimum_consecutive_feasible_thresholds,
+        help=(
+            "Require this many adjacent threshold-grid values to pass validation. "
+            "Two rejects an isolated one-point pass."
+        ),
+    )
     parser.add_argument("--device", help="Optional torch device, e.g. cuda or cpu.")
     parser.add_argument("--output-dir", default="reports_benchmark")
     return parser
@@ -121,7 +136,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
     if not args.scenario or not args.models:
-        raise SystemExit("--scenario and --models are required unless listing inventory.")
+        raise SystemExit(
+            "--scenario and --models are required unless listing inventory."
+        )
 
     models = _comma_list(args.models)
     scenario = EconomicsScenario.from_json(args.scenario)
@@ -150,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
             head_learning_rate=args.head_learning_rate,
             minimum_epochs=args.minimum_epochs,
             early_stopping_patience=args.early_stopping_patience,
+            dataset_balanced_sampling=args.dataset_balanced_sampling,
             device=args.device,
         )
         probabilities = training.safety_probabilities
@@ -168,16 +186,22 @@ def main(argv: list[str] | None = None) -> int:
         ),
         minimum_macro_quality_retention=args.minimum_macro_quality_retention,
         maximum_quality_loss_rate_ucl=args.maximum_quality_loss_rate_ucl,
-        minimum_routed_safety_precision_lcb=(
-            args.minimum_routed_safety_precision_lcb
-        ),
+        minimum_routed_safety_precision_lcb=(args.minimum_routed_safety_precision_lcb),
         minimum_guarded_dataset_quality_retention_lcb=(
             args.minimum_guarded_dataset_quality_retention_lcb
         ),
         minimum_guarded_dataset_prompts=args.minimum_guarded_dataset_prompts,
+        minimum_consecutive_feasible_thresholds=(
+            args.minimum_consecutive_feasible_thresholds
+        ),
         seed=args.seed,
         routing_probabilities=probabilities,
         router_name=router_name,
+        selected_setup=(
+            "tfidf"
+            if training is None
+            else ("dataset_balanced" if args.dataset_balanced_sampling else "default")
+        ),
         decision_metadata=(
             {
                 "router_input_tokens": training.router_input_lengths,
@@ -208,19 +232,21 @@ def main(argv: list[str] | None = None) -> int:
             minimum_guarded_dataset_quality_retention_lcb=(
                 args.minimum_guarded_dataset_quality_retention_lcb
             ),
-            minimum_guarded_dataset_prompts=(
-                args.minimum_guarded_dataset_prompts
-            ),
+            minimum_guarded_dataset_prompts=(args.minimum_guarded_dataset_prompts),
             conservative_router_overhead_s=max(
                 scenario.router_overhead_s,
                 args.conservative_router_overhead_ms / 1_000,
             ),
+            minimum_consecutive_feasible_thresholds=(
+                args.minimum_consecutive_feasible_thresholds
+            ),
+            benchmark_fingerprint=result.benchmark_fingerprint,
             config=router_config,
         )
     print(result.summary.to_string())
     print(
         f"\nrouter_active={result.router_active} "
-        f"poc_passed={result.poc_passed} "
+        f"single_run_passed={result.single_run_passed} "
         f"threshold={result.selected_threshold:g} "
         f"fallback={result.fallback_model}"
     )

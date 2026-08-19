@@ -1,4 +1,4 @@
-"""Single source of truth for the synchronized v4 experiment contract."""
+"""Single source of truth for the schema-v5 experiment on scope version 4."""
 
 from __future__ import annotations
 
@@ -56,6 +56,7 @@ class RouterConfig:
     minimum_guarded_dataset_quality_retention_lcb: float = 0.90
     minimum_guarded_dataset_prompts: int = 100
     conservative_router_overhead_s: float = 0.020
+    minimum_consecutive_feasible_thresholds: int = 2
     safety_definition: str = "candidate_quality >= fallback_quality - epsilon"
 
     encoder_repo: str = "nomic-ai/modernbert-embed-base"
@@ -112,6 +113,7 @@ class RouterConfig:
         assert self.minimum_guarded_dataset_quality_retention_lcb == 0.90
         assert self.minimum_guarded_dataset_prompts == 100
         assert self.conservative_router_overhead_s == 0.020
+        assert self.minimum_consecutive_feasible_thresholds == 2
         assert self.lora_r == 4 and self.lora_alpha == 8
         assert self.lora_target_modules == "all-linear"
         assert self.max_input_tokens == 512
@@ -140,9 +142,7 @@ class RouterConfig:
                 "minimum_macro_quality_retention": (
                     self.minimum_macro_quality_retention
                 ),
-                "maximum_quality_loss_rate_ucl": (
-                    self.maximum_quality_loss_rate_ucl
-                ),
+                "maximum_quality_loss_rate_ucl": (self.maximum_quality_loss_rate_ucl),
                 "minimum_routed_safety_precision_lcb": (
                     self.minimum_routed_safety_precision_lcb
                 ),
@@ -152,8 +152,9 @@ class RouterConfig:
                 "minimum_guarded_dataset_prompts": (
                     self.minimum_guarded_dataset_prompts
                 ),
-                "conservative_router_overhead_s": (
-                    self.conservative_router_overhead_s
+                "conservative_router_overhead_s": (self.conservative_router_overhead_s),
+                "minimum_consecutive_feasible_thresholds": (
+                    self.minimum_consecutive_feasible_thresholds
                 ),
             },
             "encoder_repo": self.encoder_repo,

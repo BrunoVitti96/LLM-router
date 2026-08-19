@@ -6,7 +6,7 @@ evaluation criteria. Keep all work consistent with that document.
 
 Every codebase update must be documented. This includes changes to Python files,
 Jupyter notebooks, configurations, tests, and routing or loss behavior. Update
-the README and relevant notebook Markdown, docstrings, or comments as needed.
+the README and relevant notebook Markdown, docstrings, or comments as needed. Changes from different versions must be kept in the audits.md file. the README.md file must be the updated explanation about the repo.
 
 Explain every change for both audiences:
 

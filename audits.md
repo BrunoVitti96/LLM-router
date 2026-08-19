@@ -150,6 +150,59 @@ The original saved seed-42 artifact used report schema v3. Reruns made after
 these changes use schema v4; their pass/fail contracts are different and their
 outcomes must not be compared as though the gates were identical.
 
+## Schema-v4 seed-42 rerun and validation-comparison redesign
+
+### What the latest rerun showed
+
+The schema-v4 rerun evaluated 2,812 test prompts and routed 315 (11.20%) to
+Fin-R1. Of those routes, 298 were safe and 17 harmful, so routed-safety precision
+was 94.60% with a one-sided 95% lower bound of 92.10%. The router gained 24
+answers and lost 17, finishing seven answers ahead of the Qwen fallback.
+
+Quality retention was 100.35% with a 99.82% lower confidence bound. Nominal
+analytical savings were 1.05% after 4 ms overhead, but only 0.20% after 20 ms.
+The break-even overhead was 23.83 ms. The router captured 12.82% of oracle
+savings and recalled only 13.82% of safe faster opportunities.
+
+The net result was task-mix sensitive. MBPP contributed 14 net answers, while
+ARC-Challenge contributed -6 and FinQA -3. Removing MBPP leaves the other
+datasets seven answers behind fallback:
+
+$$
+(24-17)-14=-7.
+$$
+
+Calibration improved validation Brier score from 0.1787 to 0.1510 and ECE from
+13.35% to 2.35%, but AUROC was only 0.739. The router was therefore calibrated
+yet only moderately discriminative, which explains high precision and low
+safe-opportunity recall.
+
+### Why schema v5 was introduced
+
+The chosen validation threshold was `0.910`. Threshold `0.905` missed the
+routed-precision gate, while `0.915` produced negative savings at 20 ms overhead.
+That made activation depend on one isolated grid point.
+
+Schema v5 made the following predeclared changes:
+
+1. compare rank-4 hybrid, rank-4 safety-only, and dataset-balanced rank-4
+   hybrid setups using validation outcomes only, with rank 8 available as an
+   optional capacity ablation;
+2. choose one setup before opening sealed-test outcomes exactly once;
+3. report a boolean result for every threshold gate plus the contiguous feasible
+   block size;
+4. require at least two neighboring feasible thresholds by default;
+5. export setup leaderboards and complete setup threshold frontiers;
+6. record benchmark fingerprint, Git commit, Python, packages, GPU, and CUDA;
+   and
+7. call the run result `single_run_passed`, retaining `poc_passed` only as a
+   schema-v4 compatibility alias.
+
+For a numerical example, one passing threshold has block size one and cannot
+activate schema v5. Two adjacent passing thresholds have block size two and meet
+the default stability rule. This deliberately trades some routing rate for a
+policy less likely to flip after a 0.005 threshold perturbation.
+
 ## Earlier measured-latency line of work
 
 The repository also retains an earlier experiment that used measured candidate

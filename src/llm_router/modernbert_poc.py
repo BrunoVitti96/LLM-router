@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import json
 import math
+import platform
+import subprocess
+import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
+from importlib import metadata
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import torch
-from torch.utils.data import DataLoader
+from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import get_cosine_schedule_with_warmup
 
 from llm_router.config import DEFAULT_CONFIG, RouterConfig
@@ -48,6 +53,7 @@ class ModernBERTHybridPOCResult:
     best_epoch: int
     epochs_completed: int
     stopped_early: bool
+    dataset_balanced_sampling: bool
     training_seconds: float
 
 
@@ -71,36 +77,37 @@ def train_modernbert_hybrid_poc(
     quality_epsilon: float = 0.0,
     safety_loss_weight: float = 1.0,
     oracle_auxiliary_weight: float = 0.25,
+    dataset_balanced_sampling: bool = False,
     device: str | None = None,
+    progress_callback: Callable[[dict[str, float | int | bool]], None] | None = None,
 ) -> ModernBERTHybridPOCResult:
     """Train safety estimates while using the oracle only as an auxiliary task.
 
     Candidate LLMs are never loaded. Benchmark outcomes supervise replacement
     safety; ``panel.latency`` must contain the deterministic analytical proxy.
+    Dataset-balanced sampling gives every dataset equal expected draw probability
+    and recomputes class weights under that distribution. ``progress_callback``
+    receives one structured dictionary after every epoch for notebook logging.
     """
 
     if head_learning_rate is None:
         head_learning_rate = learning_rate * 2
-    if (
-        epochs <= 0
-        or batch_size <= 0
-        or learning_rate <= 0
-        or head_learning_rate <= 0
-    ):
+    if epochs <= 0 or batch_size <= 0 or learning_rate <= 0 or head_learning_rate <= 0:
         raise ValueError("epochs, batch_size, and learning_rate must be positive.")
     if minimum_epochs <= 0:
         raise ValueError("minimum_epochs must be positive.")
     if early_stopping_patience is not None and early_stopping_patience <= 0:
         raise ValueError("early_stopping_patience must be positive or None.")
     if safety_loss_weight <= 0 or oracle_auxiliary_weight < 0:
-        raise ValueError("Loss weights must be non-negative and safety must be positive.")
+        raise ValueError(
+            "Loss weights must be non-negative and safety must be positive."
+        )
     device = device or ("cuda" if torch.cuda.is_available() else "cpu")
     if device.startswith("cuda") and not torch.cuda.is_available():
         raise RuntimeError("CUDA was requested but is unavailable.")
     compute_dtype = (
         torch.bfloat16
-        if device.startswith("cuda")
-        and torch.cuda.get_device_capability(0)[0] >= 8
+        if device.startswith("cuda") and torch.cuda.get_device_capability(0)[0] >= 8
         else torch.float16
     )
     seed_everything(config.seed)
@@ -165,11 +172,30 @@ def train_modernbert_hybrid_poc(
         )
         return normalized, encoded
 
+    sampling_generator = torch.Generator().manual_seed(config.seed)
+    train_sampling_weight = np.ones(len(split.train), dtype=float)
+    sampler = None
+    if dataset_balanced_sampling:
+        train_datasets = panel.examples.dataset.iloc[split.train].astype(str)
+        dataset_counts = train_datasets.value_counts()
+        train_sampling_weight = train_datasets.map(
+            lambda name: 1.0 / dataset_counts[name]
+        ).to_numpy(dtype=float, copy=True)
+        train_sampling_weight *= (
+            len(train_sampling_weight) / train_sampling_weight.sum()
+        )
+        sampler = WeightedRandomSampler(
+            torch.as_tensor(train_sampling_weight, dtype=torch.double),
+            num_samples=len(split.train),
+            replacement=True,
+            generator=sampling_generator,
+        )
     train_loader = DataLoader(
         split.train.tolist(),
         batch_size=batch_size,
-        shuffle=True,
-        generator=torch.Generator().manual_seed(config.seed),
+        shuffle=not dataset_balanced_sampling,
+        sampler=sampler,
+        generator=sampling_generator,
         collate_fn=collate,
     )
     trainable_parameters = [
@@ -213,8 +239,8 @@ def train_modernbert_hybrid_poc(
         nonfallback_indices,
         quality_epsilon,
     )
-    positive = train_safety_target.sum(axis=0)
-    negative = len(train_safety_target) - positive
+    positive = (train_safety_target * train_sampling_weight[:, None]).sum(axis=0)
+    negative = ((~train_safety_target) * train_sampling_weight[:, None]).sum(axis=0)
     safety_pos_weight = torch.tensor(
         np.clip(negative / np.maximum(positive, 1), 0.10, 10.0),
         dtype=torch.float32,
@@ -244,6 +270,7 @@ def train_modernbert_hybrid_poc(
 
     skipped_optimizer_steps = 0
     for epoch in range(1, epochs + 1):
+        epoch_started = time.perf_counter()
         model.train()
         train_total = 0.0
         train_safety = 0.0
@@ -255,9 +282,7 @@ def train_modernbert_hybrid_poc(
                 loss, parts = compute_loss(indices, encoded)
             scaler.scale(loss).backward()
             scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(
-                trainable_parameters, config.max_grad_norm
-            )
+            torch.nn.utils.clip_grad_norm_(trainable_parameters, config.max_grad_norm)
             scale_before_step = scaler.get_scale()
             scaler.step(optimizer)
             scaler.update()
@@ -270,11 +295,12 @@ def train_modernbert_hybrid_poc(
                 scheduler.step()
             train_total += float(loss.detach()) * len(indices)
             train_safety += float(parts["safety"].detach()) * len(indices)
-            train_oracle_auxiliary += float(
-                parts["oracle_auxiliary"].detach()
-            ) * len(indices)
+            train_oracle_auxiliary += float(parts["oracle_auxiliary"].detach()) * len(
+                indices
+            )
             train_examples += len(indices)
 
+        train_seconds = time.perf_counter() - epoch_started
         model.eval()
         validation_totals = {
             "total": 0.0,
@@ -293,6 +319,7 @@ def train_modernbert_hybrid_poc(
                     parts["oracle_auxiliary"]
                 ) * len(indices)
         validation_loss = validation_totals["total"] / len(split.validation)
+        epoch_seconds = time.perf_counter() - epoch_started
         history.append(
             {
                 "epoch": epoch,
@@ -309,11 +336,15 @@ def train_modernbert_hybrid_poc(
                     validation_totals["oracle_auxiliary"] / len(split.validation)
                 ),
                 "skipped_optimizer_steps": skipped_optimizer_steps,
+                "epoch_seconds": epoch_seconds,
+                "train_examples_per_second": train_examples / max(train_seconds, 1e-9),
                 "encoder_learning_rate": optimizer.param_groups[0]["lr"],
                 "head_learning_rate": optimizer.param_groups[1]["lr"],
             }
         )
-        if validation_loss < best_validation_loss:
+        improved = validation_loss < best_validation_loss
+        should_stop = False
+        if improved:
             best_validation_loss = validation_loss
             best_epoch = epoch
             best_state = {
@@ -326,6 +357,17 @@ def train_modernbert_hybrid_poc(
             and epoch >= minimum_epochs
             and epoch - best_epoch >= early_stopping_patience
         ):
+            should_stop = True
+        if progress_callback is not None:
+            progress_callback(
+                {
+                    **history[-1],
+                    "is_best_epoch": improved,
+                    "best_epoch_so_far": best_epoch,
+                    "will_stop_early": should_stop,
+                }
+            )
+        if should_stop:
             stopped_early = True
             break
 
@@ -342,9 +384,7 @@ def train_modernbert_hybrid_poc(
             logits = model(**encoded.to(device))["safety_logits"]
             safety_logit_parts.append(logits.float().cpu().numpy())
     safety_logits = np.concatenate(safety_logit_parts)
-    raw_alternative_probability = 1 / (
-        1 + np.exp(-np.clip(safety_logits, -40, 40))
-    )
+    raw_alternative_probability = 1 / (1 + np.exp(-np.clip(safety_logits, -40, 40)))
     calibration_target = np.zeros_like(safety_logits, dtype=float)
     calibration_target[split.validation] = replacement_safety_targets(
         panel.score[split.validation],
@@ -352,9 +392,7 @@ def train_modernbert_hybrid_poc(
         nonfallback_indices,
         quality_epsilon,
     )
-    nonfallback_models = tuple(
-        panel.models[index] for index in nonfallback_indices
-    )
+    nonfallback_models = tuple(panel.models[index] for index in nonfallback_indices)
     safety_pos_weights = {
         candidate: float(safety_pos_weight[position].detach().cpu())
         for position, candidate in enumerate(nonfallback_models)
@@ -395,8 +433,54 @@ def train_modernbert_hybrid_poc(
         best_epoch=best_epoch,
         epochs_completed=len(history),
         stopped_early=stopped_early,
+        dataset_balanced_sampling=dataset_balanced_sampling,
         training_seconds=time.perf_counter() - started,
     )
+
+
+def collect_runtime_metadata() -> dict[str, object]:
+    """Collect enough environment identity to explain reproducibility failures."""
+
+    project_root = Path(__file__).resolve().parents[2]
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=project_root,
+            check=True,
+            capture_output=True,
+            text=True,
+        ).stdout.strip()
+    except (OSError, subprocess.CalledProcessError):
+        commit = None
+    packages = {}
+    for package in (
+        "accelerate",
+        "huggingface-hub",
+        "numpy",
+        "pandas",
+        "peft",
+        "scikit-learn",
+        "torch",
+        "transformers",
+    ):
+        try:
+            packages[package] = metadata.version(package)
+        except metadata.PackageNotFoundError:
+            packages[package] = None
+    gpu = None
+    if torch.cuda.is_available():
+        gpu = {
+            "name": torch.cuda.get_device_name(0),
+            "capability": list(torch.cuda.get_device_capability(0)),
+            "cuda_runtime": torch.version.cuda,
+        }
+    return {
+        "repository_commit": commit,
+        "python": sys.version,
+        "platform": platform.platform(),
+        "packages": packages,
+        "gpu": gpu,
+    }
 
 
 def export_modernbert_hybrid_poc(
@@ -416,6 +500,9 @@ def export_modernbert_hybrid_poc(
     minimum_guarded_dataset_quality_retention_lcb: float | None = None,
     minimum_guarded_dataset_prompts: int = 0,
     conservative_router_overhead_s: float = 0.0,
+    minimum_consecutive_feasible_thresholds: int = 2,
+    benchmark_fingerprint: str = "",
+    setup_name: str = "default",
     safety_loss_weight: float = 1.0,
     oracle_auxiliary_weight: float = 0.25,
     config: RouterConfig = DEFAULT_CONFIG,
@@ -444,7 +531,7 @@ def export_modernbert_hybrid_poc(
         model_names[index] for index in result.nonfallback_indices
     )
     manifest = {
-        "schema_version": 4,
+        "schema_version": 5,
         "router": "ModernBERT hybrid safety router",
         "deployed_prediction": "fallback-relative replacement safety",
         "oracle_role": "training-only auxiliary loss",
@@ -461,6 +548,7 @@ def export_modernbert_hybrid_poc(
             "safety_positive_weights": result.safety_pos_weights,
             "oracle_auxiliary_weight": oracle_auxiliary_weight,
         },
+        "selected_setup": setup_name,
         "selected_safety_threshold": selected_threshold,
         "calibration": {
             "method": "per-candidate Platt scaling",
@@ -483,8 +571,18 @@ def export_modernbert_hybrid_poc(
             ),
             "minimum_guarded_dataset_prompts": minimum_guarded_dataset_prompts,
             "conservative_router_overhead_s": conservative_router_overhead_s,
+            "minimum_consecutive_feasible_thresholds": (
+                minimum_consecutive_feasible_thresholds
+            ),
         },
         "validation_router_active": router_active,
+        "single_run_passed": poc_passed,
+        "study_status": (
+            "single_run_passed_requires_multi_seed_and_dataset_ood_confirmation"
+            if poc_passed
+            else "single_run_failed"
+        ),
+        # Compatibility alias for schema-v4 artifact readers.
         "poc_passed": poc_passed,
         "failure_reasons": failure_reasons,
         "router_active": router_active and poc_passed,
@@ -499,9 +597,12 @@ def export_modernbert_hybrid_poc(
             "best_epoch": result.best_epoch,
             "epochs_completed": result.epochs_completed,
             "stopped_early": result.stopped_early,
+            "dataset_balanced_sampling": result.dataset_balanced_sampling,
         },
         "input_diagnostics": result.input_diagnostics,
         "training_seconds": result.training_seconds,
+        "benchmark_fingerprint_sha256": benchmark_fingerprint,
+        "reproducibility": collect_runtime_metadata(),
     }
     (output_dir / "manifest.json").write_text(
         json.dumps(manifest, indent=2), encoding="utf-8"

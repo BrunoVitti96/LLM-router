@@ -7,12 +7,14 @@ from llm_router.public_benchmark import (
     BenchmarkPanel,
     EconomicsScenario,
     ModelProfile,
+    benchmark_fingerprint,
     benchmark_inventory,
     export_public_benchmark,
     load_llmrouterbench,
     make_complete_panel,
     normalized_prompt_hash,
     run_public_benchmark,
+    select_validation_policy,
     simulate_economics,
     split_benchmark,
 )
@@ -177,7 +179,9 @@ def test_export_records_explicit_poc_status_and_candidate_diagnostics(tmp_path):
     assert (output / "candidate_diagnostics.csv").is_file()
     assert (output / "per_dataset_metrics.csv").is_file()
     assert (output / "test_router_overhead_sensitivity.csv").is_file()
-    assert manifest["schema_version"] == 4
+    assert manifest["schema_version"] == 5
+    assert manifest["single_run_passed"] == manifest["poc_passed"]
+    assert manifest["benchmark_fingerprint_sha256"]
 
 
 def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
@@ -193,6 +197,7 @@ def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
     )
     assert not result.router_active
     assert not result.poc_passed
+    assert not result.single_run_passed
     assert result.failure_reasons
     assert result.fallback_model == "strong"
     assert result.summary.loc["outcome_oracle", "resource_savings"] > 0
@@ -236,9 +241,25 @@ def test_safety_probabilities_drive_hybrid_policy_without_timing_inference(tmp_p
         as_of="2026-08-17",
         latency_method="analytical",
         profiles=(
-            ModelProfile("fast", 0.1, 0.2, parameters_billions=1.0, architecture="autoregressive"),
-            ModelProfile("specialist", 0.2, 0.4, parameters_billions=2.0, architecture="diffusion", diffusion_steps=4, diffusion_block_size=8),
-            ModelProfile("strong", 1.0, 2.0, parameters_billions=7.0, architecture="autoregressive"),
+            ModelProfile(
+                "fast", 0.1, 0.2, parameters_billions=1.0, architecture="autoregressive"
+            ),
+            ModelProfile(
+                "specialist",
+                0.2,
+                0.4,
+                parameters_billions=2.0,
+                architecture="diffusion",
+                diffusion_steps=4,
+                diffusion_block_size=8,
+            ),
+            ModelProfile(
+                "strong",
+                1.0,
+                2.0,
+                parameters_billions=7.0,
+                architecture="autoregressive",
+            ),
         ),
     )
     simulated = simulate_economics(records, analytical)
@@ -297,9 +318,9 @@ def test_strict_policy_gates_and_decision_metadata_are_enforced(tmp_path):
     )
 
     assert result.router_active
-    assert result.summary.loc[
-        "tfidf_safety_router", "conservative_resource_savings"
-    ] > 0
+    assert (
+        result.summary.loc["tfidf_safety_router", "conservative_resource_savings"] > 0
+    )
     assert result.decisions.router_input_tokens.isin(metadata).all()
     assert result.minimum_macro_quality_retention == 0.5
 
@@ -314,3 +335,70 @@ def test_strict_policy_gates_and_decision_metadata_are_enforced(tmp_path):
     )
     assert not blocked.router_active
     assert not blocked.poc_passed
+
+
+def test_validation_setup_selection_never_uses_sealed_test_outcomes(tmp_path):
+    records = load_llmrouterbench(synthetic_release(tmp_path), models=MODELS)
+    panel = make_complete_panel(simulate_economics(records, scenario()), MODELS)
+    split = split_benchmark(panel, mode="random", seed=42)
+    probabilities = np.full_like(panel.score, 0.01)
+    probabilities[:, 0] = 0.98
+    probabilities[:, 2] = 1.0
+    settings = {
+        "objective": "latency",
+        "minimum_quality_retention": 0.5,
+        "confidence": 0.8,
+        "threshold_grid": (0.90, 0.95),
+        "routing_probabilities": probabilities,
+        "minimum_consecutive_feasible_thresholds": 2,
+    }
+
+    original = select_validation_policy(panel, split, **settings)
+    changed_score = panel.score.copy()
+    changed_score[split.test] = 1.0 - changed_score[split.test]
+    changed_panel = BenchmarkPanel(
+        examples=panel.examples,
+        models=panel.models,
+        score=changed_score,
+        cost=panel.cost,
+        latency=panel.latency,
+    )
+    changed = select_validation_policy(changed_panel, split, **settings)
+
+    pd.testing.assert_frame_equal(original.threshold_search, changed.threshold_search)
+    assert original.selected_threshold == changed.selected_threshold
+    assert benchmark_fingerprint(panel) != benchmark_fingerprint(changed_panel)
+    assert {
+        "passes_base_gates",
+        "feasible_block_size",
+        "passes_stability_gate",
+        "is_feasible",
+    }.issubset(original.threshold_search.columns)
+
+
+def test_threshold_stability_gate_rejects_an_isolated_pass(tmp_path):
+    records = load_llmrouterbench(synthetic_release(tmp_path), models=MODELS)
+    panel = make_complete_panel(simulate_economics(records, scenario()), MODELS)
+    split = split_benchmark(panel, mode="random", seed=42)
+
+    permissive = select_validation_policy(
+        panel,
+        split,
+        objective="latency",
+        minimum_quality_retention=0.5,
+        confidence=0.8,
+        minimum_consecutive_feasible_thresholds=1,
+    )
+    required_block = int(permissive.threshold_search.passes_base_gates.sum()) + 1
+    stable = select_validation_policy(
+        panel,
+        split,
+        objective="latency",
+        minimum_quality_retention=0.5,
+        confidence=0.8,
+        minimum_consecutive_feasible_thresholds=required_block,
+    )
+
+    assert permissive.router_active
+    assert not stable.router_active
+    assert stable.failure_reasons

@@ -21,9 +21,7 @@ def test_hybrid_poc_notebook_is_clean_didactic_and_syntactically_valid():
     assert all(cell["execution_count"] is None for cell in code_cells)
     assert all(not cell["outputs"] for cell in code_cells)
 
-    full_text = "\n".join(
-        "".join(cell["source"]) for cell in notebook["cells"]
-    )
+    full_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
     required_lessons = (
         "Leakage check",
         "hindsight oracle",
@@ -35,21 +33,24 @@ def test_hybrid_poc_notebook_is_clean_didactic_and_syntactically_valid():
         "scenario sensitivity",
         "validation_sensitivity.csv",
         'SPLIT_MODE = "random"',
-        "candidate_diagnostics",
         "per_dataset_metrics",
-        "VALIDATION_QUALITY_MARGIN",
-        "MINIMUM_ROUTED_SAFETY_PRECISION_LCB",
-        "MINIMUM_GUARDED_DATASET_QUALITY_LCB",
-        "CONSERVATIVE_ROUTER_OVERHEAD_S",
+        "SETUP_SPECS",
+        "setup_comparison.csv",
+        "setup_threshold_search.csv",
+        "select_validation_policy",
+        "choose_validation_setup",
+        "MINIMUM_CONSECUTIVE_FEASIBLE_THRESHOLDS",
+        "feasible_block_size",
         "prompt_hash",
         "input_diagnostics",
         "router_was_truncated",
         "early_stopping_patience",
-        "break_even_router_overhead_ms",
+        "router_overhead_sensitivity",
+        "single_run_passed",
         "poc_passed",
-        "Train ModernBERT",
+        "Train every declared setup",
         "sealed test",
-        "Final POC checklist",
+        "Final interpretation checklist",
         "git clone --branch develop",
         "hf_hub_download",
         "archive_preview",
@@ -58,14 +59,15 @@ def test_hybrid_poc_notebook_is_clean_didactic_and_syntactically_valid():
     )
     assert all(lesson in full_text for lesson in required_lessons)
     assert "train_modernbert_oracle_poc" not in full_text
-    assert "probability_kind=\"oracle\"" not in full_text
-    assert '-e \".[notebook]\"' not in full_text
-    assert 'sys.path.insert(0, SOURCE_ROOT)' in full_text
+    assert 'probability_kind="oracle"' not in full_text
+    assert '-e ".[notebook]"' not in full_text
+    assert "sys.path.insert(0, SOURCE_ROOT)" in full_text
     assert 'module_name.startswith("llm_router.")' in full_text
-    assert 'import llm_router' in full_text
+    assert "import llm_router" in full_text
     assert full_text.count("%pip install") == 1
     assert "replace-with" not in full_text
     assert 'rglob("bench")' not in full_text
+    assert full_text.count("run_public_benchmark(") == 1
 
     for cell in code_cells:
         source = "".join(cell["source"])

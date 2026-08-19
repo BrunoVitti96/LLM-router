@@ -2,9 +2,11 @@
 
 This proof of concept trains
 [`nomic-ai/modernbert-embed-base`](https://huggingface.co/nomic-ai/modernbert-embed-base)
-with rank-4 LoRA to estimate whether a faster candidate can preserve the quality
-of a strong fallback for each prompt. A deterministic analytical estimator then
-selects the lowest-latency candidate predicted safe.
+with lightweight LoRA adapters to estimate whether a faster candidate can
+preserve the quality of a strong fallback for each prompt. The notebook compares
+loss and dataset-sampling setups, with an optional rank-8 capacity ablation,
+before a deterministic analytical estimator selects the lowest-latency candidate
+predicted safe.
 
 ModernBERT does **not** predict latency and does **not** directly predict the
 final model. Candidate latency comes from model size, generation architecture,
@@ -26,9 +28,11 @@ uses the fastest eligible alternative. Otherwise it safely uses the fallback.
 
 Technically, ModernBERT predicts a separate fallback-relative safety probability
 for every non-fallback candidate. The selector combines those probabilities with
-analytical latency estimates, then freezes its threshold on validation data
-before it opens the sealed test set. The test is successful only if conservative
-quality, subgroup, harm, calibration, and latency-overhead gates all pass.
+analytical latency estimates. The notebook compares three training setups using
+validation outcomes only, freezes one setup and one stable threshold region, and
+then opens the sealed test exactly once. The test is successful only if
+conservative quality, subgroup, harm, calibration, threshold-stability, and
+latency-overhead gates all pass.
 
 For a simplified numerical example, suppose the fallback answers 80 of 100
 prompts correctly. A routed policy answers 79 correctly, so its point-estimate
@@ -38,21 +42,30 @@ test gate. If faster routing saves 50 ms per prompt before routing cost and the
 router costs 4 ms, net analytical savings are $50-4=46$ ms per prompt. The
 policy must satisfy both the quality and latency requirements.
 
+The default setup comparison asks two concrete questions. Comparing rank-4
+hybrid training against rank-4 safety-only training tests whether the
+training-only oracle helps. Comparing ordinary against dataset-balanced rank-4
+training tests whether large datasets dominate performance. An optional rank-8
+setup tests adapter capacity. These are validation experiments; the test set is
+not used to pick the winner.
+
 ## Routing logic
 
 ```mermaid
 flowchart LR
-    P["Prompt + prompt-token count"] --> M["ModernBERT + rank-4 LoRA"]
+    P["Prompt + prompt-token count"] --> M["Declared ModernBERT setups"]
     M --> R["Raw safety logits per alternative"]
     R --> C["Per-candidate Platt calibration"]
     P --> T["Analytical latency estimator"]
     F["Parameters, precision, AR/diffusion facts"] --> T
     H["Hardware and output-length assumptions"] --> T
-    C --> E{"Calibrated safety ≥ threshold?"}
+    C --> V["Validation-only setup comparison"]
+    V --> FZ["Freeze one setup and stable threshold block"]
+    FZ --> E{"Calibrated safety ≥ threshold?"}
     T --> E
     E -->|"Eligible alternatives"| A["Choose lowest analytical latency"]
     E -->|"None"| B["Choose training-selected fallback"]
-    A --> G{"All aggregate, group, harm, precision, and overhead gates pass?"}
+    A --> G{"All quality, group, harm, precision, overhead, and stability gates pass?"}
     B --> G
     G -->|"Pass"| D["Activate frozen policy"]
     G -->|"Fail"| X["Fallback-only policy"]
@@ -114,6 +127,20 @@ $$
 Net analytical savings must also stay positive when router overhead is replaced
 by the conservative 20 ms assumption. These are configurable command-line and
 Python parameters, but their chosen values must be frozen before opening test.
+
+Schema v5 also requires a contiguous block of at least two feasible threshold
+grid values. Let $g_i=1$ when threshold $\tau_i$ passes every gate. Activation
+requires a consecutive run with length at least two:
+
+$$
+\max_{a\le b}\left\{b-a+1:\prod_{i=a}^{b}g_i=1\right\}\ge2.
+$$
+
+For example, if only `0.910` passes, its feasible block size is one and the
+router remains fallback-only. If `0.905` and `0.910` both pass, the block size
+is two and the stability gate passes. This prevents a 0.005 threshold change
+from silently moving the policy from safe to unsafe or from profitable to
+unprofitable.
 
 ## Loss: what the router learns
 
@@ -247,6 +274,30 @@ shared ModernBERT representation during training and is not consulted by the
 production selector. The loss is therefore a differentiable training proxy for
 the real objective: minimize latency subject to preserving fallback quality.
 
+The Colab notebook treats the oracle coefficient and LoRA rank as predeclared
+validation ablations:
+
+| Setup | LoRA rank | Oracle coefficient | Dataset-balanced | Question answered |
+|---|---:|---:|---:|---|
+| `hybrid_r4` | 4 | 0.25 | No | Current hybrid baseline |
+| `safety_only_r4` | 4 | 0.00 | No | Does the oracle auxiliary loss help? |
+| `hybrid_r4_dataset_balanced` | 4 | 0.25 | Yes | Do large datasets dominate training? |
+| `hybrid_r8` (optional) | 8 | 0.25 | No | Does additional adapter capacity help? |
+
+All enabled setups use the same train/validation/test split. Their setup leaderboard,
+calibration diagnostics, threshold frontiers, and training curves use validation
+only. The selected setup alone is evaluated on sealed-test outcomes.
+
+Dataset-balanced sampling assigns every training row from dataset $d$ weight
+$1/N_d$ and samples with replacement. After normalization, each of $D$ datasets
+therefore supplies expected probability $1/D$ per optimizer draw. The BCE class
+weights are calculated from the same dataset-balanced weights so sampling and
+loss weighting describe one target distribution. For example, ordinary sampling
+from datasets with 800 and 200 prompts draws them approximately 80% and 20% of
+the time; dataset-balanced sampling targets 50% and 50%. The tradeoff is higher
+variance and more repeated draws from the 200-prompt dataset, which is why it is
+an ablation selected on validation rather than an unconditional replacement.
+
 The LoRA adapter uses learning rate $10^{-4}$ while the randomly initialized
 heads use $2\times10^{-4}$. Notebook training can run for at most eight epochs,
 but stops
@@ -329,17 +380,28 @@ generalization.
 
 1. Select **Runtime → Change runtime type → GPU**.
 2. Run every cell from top to bottom with `SPLIT_MODE = "random"`.
-3. Download the generated random-split ZIP.
-4. Repeat with additional seeds.
-5. Only then change to `SPLIT_MODE = "dataset_ood"` and create separate ZIPs.
+3. Let all three declared setups finish; three setups take about three times as
+   long as a single training run.
+4. Inspect the validation-only comparison and threshold-frontier plots.
+5. Download the generated random-split ZIP.
+6. Repeat unchanged with seeds 43 and 44.
+7. Only then change to `SPLIT_MODE = "dataset_ood"` and create separate ZIPs.
 
 The notebook downloads LLMRouterBench, checks candidate names, proves
 completion-length leakage is absent, audits prompt-content groups, runs
 validation-only sensitivity scenarios, trains and calibrates ModernBERT with
-early stopping, freezes the policy with a validation safety margin, opens the
-sealed test, and exports a reconstructable artifact plus report. The canonical
-notebook is intentionally stored without execution output; the downloaded ZIP
-is the run record.
+epoch-level logs and early stopping, compares the declared setups on validation,
+visualizes training, calibration, threshold, dataset, overhead, and truncation
+behavior, freezes one setup with a validation safety margin and threshold
+stability rule, opens the sealed test once, and exports a reconstructable
+artifact plus report. The canonical notebook is intentionally stored without
+execution output; the downloaded ZIP is the run record.
+
+Each epoch log reports train and validation loss, whether it became the best
+checkpoint, wall-clock seconds, training examples per second, cumulative skipped
+mixed-precision steps, and whether early stopping will fire. For example, if an
+epoch processes 8,425 examples in 300 seconds, the log reports approximately
+$8425/300=28.1$ training examples per second.
 
 The resolver may warn about Colab's unused Gradio installation. That warning is
 not a router-training failure.
@@ -350,6 +412,12 @@ The report directory contains:
 
 - `strategy_summary.csv`: baselines, oracle, router, and oracle-savings capture;
 - `threshold_search.csv`: validation quality/savings frontier;
+- `setup_comparison.csv`: validation-only setup leaderboard and the one row
+  selected for sealed-test evaluation;
+- `setup_threshold_search.csv`: all setup-specific threshold frontiers and
+  per-gate pass/fail columns;
+- `setup_diagnostics/<setup>/`: training and calibration diagnostics for every
+  compared setup;
 - `candidate_diagnostics.csv`: quality, safety, speed, and oracle-selection rate
   by split and candidate;
 - `per_dataset_metrics.csv`: strategy quality, savings, harm bounds, and routing
@@ -359,25 +427,30 @@ The report directory contains:
 - `test_router_overhead_sensitivity.csv`: the frozen test policy under several
   router-overhead assumptions;
 - `test_decisions.parquet`: sealed-test prompt-level decisions;
-- `experiment_manifest.json`: analytical assumptions and explicit POC status;
+- `experiment_manifest.json`: analytical assumptions, benchmark fingerprint,
+  threshold-stability contract, and explicit single-run status;
 - `modernbert_router/training_history.csv`;
 - `modernbert_router/calibration_diagnostics.csv`;
 - `modernbert_router/input_diagnostics.json`;
 - exported Platt parameters, LoRA adapter, heads, tokenizer, and router manifest.
 
-The current `test_decisions.parquet` schema also stores
+The schema-v5 `test_decisions.parquet` also stores
 `safety_probability__<model>` for every candidate plus `router_input_tokens`
-and `router_was_truncated`. Thus, if
-48 routes are harmful, the report can show whether they were high-confidence
+and `router_was_truncated`. Thus, if 17 routes are harmful, the report can show
+whether they were high-confidence
 errors or disproportionately truncated prompts. `strategy_summary.csv` and
 `threshold_search.csv` add routed-precision LCB, safe-opportunity recall,
-guarded-dataset retention, and conservative-overhead savings.
+guarded-dataset retention, and conservative-overhead savings. Threshold reports
+also include every individual gate, gate count, feasible block size, and final
+stability status.
 
-`poc_passed` is true only when the frozen policy also passes every sealed-test
-quality, savings, and non-trivial-routing criterion. Failure reasons are written
-explicitly; a fallback-only result is not a successful router. The exported
-artifact sets `deployment_enabled` only when both validation activation and the
-sealed-test POC gate pass.
+`single_run_passed` is true only when the frozen policy also passes every
+sealed-test quality, savings, and non-trivial-routing criterion. Failure reasons
+are written explicitly; a fallback-only result is not a successful router. The
+legacy `poc_passed` key is a compatibility alias, not a multi-seed claim. The
+exported artifact sets `deployment_enabled` only when both validation activation
+and the sealed-test single-run gate pass. Its reproducibility block records the
+repository commit, Python and package versions, GPU, and CUDA runtime.
 
 ## Command-line equivalents
 
@@ -398,6 +471,7 @@ llm-router-benchmark \
   --minimum-guarded-dataset-quality-retention-lcb 0.90 \
   --minimum-guarded-dataset-prompts 100 \
   --conservative-router-overhead-ms 20 \
+  --minimum-consecutive-feasible-thresholds 2 \
   --output-dir reports_benchmark/random_seed_42
 ```
 
@@ -416,10 +490,15 @@ llm-router-benchmark \
 ```
 
 `--router tfidf` remains a cheap diagnostic baseline.
+`--dataset-balanced-sampling` enables the equal-dataset sampling ablation for a
+single CLI run; use a separate output directory and choose between runs using
+validation evidence only.
 
 ## What counts as a credible POC
 
 - validation-only oracle headroom remains positive across sensitivity scenarios;
+- setup selection uses validation only and sealed-test outcomes are opened once;
+- at least two neighboring thresholds pass every validation gate;
 - every retained alternative has a non-zero oracle-selection rate;
 - calibrated ModernBERT routes a non-trivial sealed-test fraction;
 - the sealed-test 95% quality-retention LCB is at least 98%;
@@ -449,6 +528,7 @@ src/llm_router/
 ├── analytical_latency.py       # measurement-free latency equations
 ├── oracle.py                   # balanced safety and auxiliary oracle losses
 ├── modernbert_poc.py           # training, calibration, and artifact export
+├── experiment_comparison.py    # validation-only setup leaderboard
 ├── public_benchmark.py         # policy selection and sealed evaluation
 ├── benchmark_cli.py            # optional command-line driver
 └── models/modernbert_router.py # ModernBERT + LoRA heads

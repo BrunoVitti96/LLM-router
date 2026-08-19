@@ -24,6 +24,7 @@ def test_contract_keeps_deployment_guard():
         "minimum_guarded_dataset_quality_retention_lcb": 0.90,
         "minimum_guarded_dataset_prompts": 100,
         "conservative_router_overhead_s": 0.020,
+        "minimum_consecutive_feasible_thresholds": 2,
     }
     assert contract["checkpoint_rule"] == (
         "calibrated overhead-inclusive validation routing"

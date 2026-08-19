@@ -73,9 +73,7 @@ def test_hybrid_loss_trains_safety_and_keeps_oracle_auxiliary():
     assert safe_loss < unsafe_loss
     assert parts["safety"] > 0
     assert parts["oracle_auxiliary"] > 0
-    targets = replacement_safety_targets(
-        quality.numpy(), 2, nonfallback.numpy()
-    )
+    targets = replacement_safety_targets(quality.numpy(), 2, nonfallback.numpy())
     assert targets.tolist() == [[True, False], [False, True]]
 
 
@@ -104,9 +102,7 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
         modernbert_poc,
         "build_hybrid_router",
         lambda config, nonfallback_count, model_count: (
-            HybridModernBERTRouter(
-                TinyEncoder(), 6, nonfallback_count, model_count
-            ),
+            HybridModernBERTRouter(TinyEncoder(), 6, nonfallback_count, model_count),
             TinyTokenizer(),
         ),
     )
@@ -120,9 +116,7 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
     panel = BenchmarkPanel(
         examples=examples,
         models=("fast", "fallback"),
-        score=np.array(
-            [[1, 1], [0, 1], [1, 1], [0, 1], [1, 1], [0, 1]], dtype=float
-        ),
+        score=np.array([[1, 1], [0, 1], [1, 1], [0, 1], [1, 1], [0, 1]], dtype=float),
         cost=np.ones((6, 2)),
         latency=np.array([[1, 4]] * 6, dtype=float),
     )
@@ -136,7 +130,12 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
         test_datasets=("c",),
     )
     result = modernbert_poc.train_modernbert_hybrid_poc(
-        panel, split, epochs=1, batch_size=2, device="cpu"
+        panel,
+        split,
+        epochs=1,
+        batch_size=2,
+        dataset_balanced_sampling=True,
+        device="cpu",
     )
     assert result.safety_probabilities.shape == panel.score.shape
     assert result.raw_safety_probabilities.shape == panel.score.shape
@@ -150,18 +149,16 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
         "unsafe_average_precision",
     }.issubset(result.calibration_diagnostics.columns)
     assert set(result.safety_pos_weights) == {"fast"}
-    assert np.allclose(
-        result.safety_probabilities[:, result.fallback_index], 1.0
-    )
+    assert np.allclose(result.safety_probabilities[:, result.fallback_index], 1.0)
     assert np.all(
-        (result.safety_probabilities >= 0)
-        & (result.safety_probabilities <= 1)
+        (result.safety_probabilities >= 0) & (result.safety_probabilities <= 1)
     )
     assert len(result.history) == 1
     assert result.history.skipped_optimizer_steps.iloc[0] == 0
     assert result.best_epoch == 1
     assert result.epochs_completed == 1
     assert not result.stopped_early
+    assert result.dataset_balanced_sampling
     assert result.input_diagnostics["examples"] == len(panel.examples)
     assert result.router_input_lengths.shape == (len(panel.examples),)
     assert result.router_was_truncated.shape == (len(panel.examples),)
