@@ -34,6 +34,13 @@ then opens the sealed test exactly once. The test is successful only if
 conservative quality, subgroup, harm, calibration, threshold-stability, and
 latency-overhead gates all pass.
 
+The repository now freezes a six-run evidence plan: random and dataset-OOD modes
+at seeds 42, 43, and 44. One Colab session executes one named run and exports one
+ZIP. ModernBERT batch-one overhead is measured on the active Colab GPU, but the
+candidate LLMs are never loaded or timed. Their latency remains analytical. The
+measurement is diagnostic and cannot retroactively change the frozen 4 ms and
+20 ms policy gates.
+
 For a simplified numerical example, suppose the fallback answers 80 of 100
 prompts correctly. A routed policy answers 79 correctly, so its point-estimate
 quality retention is $79/80=98.75\%$. That point estimate alone is insufficient:
@@ -333,6 +340,22 @@ $$
 Realized completion length is excluded. The notebook changes every recorded
 completion length by 100× and asserts that analytical latency is unchanged.
 
+### What is measured and what remains analytical
+
+Candidate latency remains measurement-free throughout the POC. Fin-R1 and
+Qwen3-8B are not loaded in Colab. After validation freezes the setup and
+threshold, the notebook measures only the ModernBERT decision path on 100
+deterministically sampled validation prompts after 10 warmup requests. It exports
+model-only and end-to-end batch-one distributions; end-to-end includes
+tokenization, host-to-device transfer, and ModernBERT inference.
+
+For example, suppose a frozen policy's break-even router overhead is 26.9 ms.
+A measured ModernBERT p50 of 14 ms is below break-even, while a p95 of 31 ms is
+above it. The correct conclusion is that median economics remain viable but tail
+latency needs batching, distillation, or a wider candidate latency gap. Neither
+measurement changes the analytical candidate estimates or the already-opened
+test result.
+
 ## Default candidate panel
 
 The clean default uses two benchmark candidates:
@@ -374,18 +397,36 @@ Repeat both modes with at least seeds 42, 43, and 44 before making a stability
 claim. A random pass with an OOD failure proves feasibility, not cross-domain
 generalization.
 
+The immutable run IDs are:
+
+| Run ID | Split claim | Seed |
+|---|---|---:|
+| `random_seed_42` | prompt-level feasibility | 42 |
+| `random_seed_43` | prompt-level feasibility | 43 |
+| `random_seed_44` | prompt-level feasibility | 44 |
+| `dataset_ood_seed_42` | unseen-dataset stress test | 42 |
+| `dataset_ood_seed_43` | unseen-dataset stress test | 43 |
+| `dataset_ood_seed_44` | unseen-dataset stress test | 44 |
+
+Only `RUN_ID` changes between Colab sessions. The loss, three setup ablations,
+candidate facts, threshold grid, confidence gates, and analytical scenario remain
+fixed, including the scenario identity date `2026-08-19` inherited from the
+completed seed-42 contract. See the [`Colab runbook`](docs/COLAB_RUNBOOK.md).
+
 ## Train entirely in Google Colab
 
 [Open notebook 02 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/develop/notebooks/02_train_modernbert_hybrid_poc.ipynb)
 
 1. Select **Runtime → Change runtime type → GPU**.
-2. Run every cell from top to bottom with `SPLIT_MODE = "random"`.
+2. Set `RUN_ID = "random_seed_43"` and run every cell from top to bottom.
 3. Let all three declared setups finish; three setups take about three times as
    long as a single training run.
-4. Inspect the validation-only comparison and threshold-frontier plots.
-5. Download the generated random-split ZIP.
-6. Repeat unchanged with seeds 43 and 44.
-7. Only then change to `SPLIT_MODE = "dataset_ood"` and create separate ZIPs.
+4. Inspect the validation-only comparison, threshold frontier, and measured
+   ModernBERT p50/p95 versus break-even overhead.
+5. Use the Gradio share link to demonstrate safety probability, fallback use,
+   analytical candidate latency, and estimated savings.
+6. Download the generated `random_seed_43` ZIP.
+7. Repeat with `random_seed_44`, then the three `dataset_ood_seed_*` run IDs.
 
 The notebook downloads LLMRouterBench, checks candidate names, proves
 completion-length leakage is absent, audits prompt-content groups, runs
@@ -394,8 +435,15 @@ epoch-level logs and early stopping, compares the declared setups on validation,
 visualizes training, calibration, threshold, dataset, overhead, and truncation
 behavior, freezes one setup with a validation safety margin and threshold
 stability rule, opens the sealed test once, and exports a reconstructable
-artifact plus report. The canonical notebook is intentionally stored without
-execution output; the downloaded ZIP is the run record.
+artifact plus report. It then measures ModernBERT only and launches a routing
+demo whose candidate latency remains analytical. The canonical notebook is
+intentionally stored without execution output; the downloaded ZIP is the run
+record.
+
+The current investor-facing summary and honest limitations are in
+[`docs/POC_INVESTOR_BRIEF.md`](docs/POC_INVESTOR_BRIEF.md). The gated use of
+funding is described in
+[`docs/FUNDED_VALIDATION_PLAN.md`](docs/FUNDED_VALIDATION_PLAN.md).
 
 Each epoch log reports train and validation loss, whether it became the best
 checkpoint, wall-clock seconds, training examples per second, cumulative skipped
@@ -426,6 +474,11 @@ The report directory contains:
   hardware and output-length assumptions;
 - `test_router_overhead_sensitivity.csv`: the frozen test policy under several
   router-overhead assumptions;
+- `modernbert_overhead_benchmark.json`: named-hardware ModernBERT-only timing
+  contract and model-only/end-to-end distributions;
+- `modernbert_overhead_samples.csv`: request-level router timing samples;
+- `modernbert_overhead_comparison.csv`: 4 ms, 20 ms, measured p50/p95, and the
+  frozen policy's break-even overhead;
 - `test_decisions.parquet`: sealed-test prompt-level decisions;
 - `experiment_manifest.json`: analytical assumptions, benchmark fingerprint,
   threshold-stability contract, and explicit single-run status;
@@ -511,6 +564,10 @@ validation evidence only.
 - random feasibility passes across several seeds; and
 - dataset-OOD results are reported separately and honestly.
 
+For commercial credibility, also require that measured ModernBERT p50 and p95
+are compared with break-even overhead, and that customer-specific value is shown
+without converting analytical milliseconds into guaranteed dollar savings.
+
 Production still requires calibrating analytical constants with a small aggregate
 hardware study. That is different from timing every candidate for every prompt.
 
@@ -526,12 +583,20 @@ notebooks/
 
 src/llm_router/
 ├── analytical_latency.py       # measurement-free latency equations
+├── experiment_plan.py          # immutable six-run study and setup menu
+├── router_overhead.py          # ModernBERT-only target-hardware timing
+├── hybrid_inference.py         # analytical selector and Gradio demo runtime
 ├── oracle.py                   # balanced safety and auxiliary oracle losses
 ├── modernbert_poc.py           # training, calibration, and artifact export
 ├── experiment_comparison.py    # validation-only setup leaderboard
 ├── public_benchmark.py         # policy selection and sealed evaluation
 ├── benchmark_cli.py            # optional command-line driver
 └── models/modernbert_router.py # ModernBERT + LoRA heads
+
+docs/
+├── COLAB_RUNBOOK.md            # one-run-per-ZIP execution order
+├── POC_INVESTOR_BRIEF.md       # one-page evidence and limitations
+└── FUNDED_VALIDATION_PLAN.md   # customers, milestones, and exit criteria
 ```
 
 ## Development checks

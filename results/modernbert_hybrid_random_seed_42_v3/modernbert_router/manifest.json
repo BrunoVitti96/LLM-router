@@ -1,0 +1,102 @@
+{
+  "schema_version": 5,
+  "router": "ModernBERT hybrid safety router",
+  "deployed_prediction": "fallback-relative replacement safety",
+  "oracle_role": "training-only auxiliary loss",
+  "encoder_repo": "nomic-ai/modernbert-embed-base",
+  "encoder_revision": "d556a88e332558790b210f7bdbe87da2fa94a8d8",
+  "router_max_input_tokens": 512,
+  "model_names": [
+    "Fin-R1",
+    "Qwen3-8B"
+  ],
+  "fallback_model": "Qwen3-8B",
+  "nonfallback_models": [
+    "Fin-R1"
+  ],
+  "input_features": "prompt text and prompt-token count; no dataset identifier",
+  "safety_definition": "candidate_quality >= fallback_quality - epsilon",
+  "loss": {
+    "safety_bce_weight": 1.0,
+    "safety_positive_weights": {
+      "Fin-R1": 0.30135929584503174
+    },
+    "oracle_auxiliary_weight": 0.25
+  },
+  "selected_setup": "hybrid_r4",
+  "selected_safety_threshold": 0.91,
+  "calibration": {
+    "method": "per-candidate Platt scaling",
+    "validation_probabilities": "out-of-fold",
+    "deployment_parameters": {
+      "Fin-R1": {
+        "slope": 0.6774202585220337,
+        "intercept": 0.9316665530204773
+      }
+    }
+  },
+  "minimum_predicted_savings": 0.02,
+  "validation_quality_margin": 0.01,
+  "policy_gates": {
+    "minimum_macro_quality_retention": 0.98,
+    "maximum_quality_loss_rate_ucl": 0.025,
+    "minimum_routed_safety_precision_lcb": 0.9,
+    "minimum_guarded_dataset_quality_retention_lcb": 0.9,
+    "minimum_guarded_dataset_prompts": 100,
+    "conservative_router_overhead_s": 0.02,
+    "minimum_consecutive_feasible_thresholds": 2
+  },
+  "validation_router_active": true,
+  "single_run_passed": true,
+  "study_status": "single_run_passed_requires_multi_seed_and_dataset_ood_confirmation",
+  "poc_passed": true,
+  "failure_reasons": [],
+  "router_active": true,
+  "deployment_enabled": true,
+  "latency_source": "analytical_model_profile_and_prompt_tokens",
+  "candidate_inference_used_for_latency": false,
+  "optimization": {
+    "encoder_learning_rate": 0.0001,
+    "head_learning_rate": 0.0002,
+    "minimum_epochs": 2,
+    "early_stopping_patience": 2,
+    "best_epoch": 3,
+    "epochs_completed": 5,
+    "stopped_early": true,
+    "dataset_balanced_sampling": false
+  },
+  "input_diagnostics": {
+    "examples": 14041,
+    "max_input_tokens": 512,
+    "truncated_examples": 474,
+    "truncation_rate": 0.03375827932483441,
+    "router_tokens_p50": 85.0,
+    "router_tokens_p95": 463.0,
+    "router_tokens_max": 1408
+  },
+  "training_seconds": 1840.7338760750001,
+  "benchmark_fingerprint_sha256": "a2d0df2db1914e3a0813f34c807a1f568408633fd3d6e00b7be8fc59023caa37",
+  "reproducibility": {
+    "repository_commit": "4cb2b9e6c7df8abdcc70b2040e268d576b89b102",
+    "python": "3.12.13 (main, Mar  4 2026, 09:23:07) [GCC 11.4.0]",
+    "platform": "Linux-6.6.122+-x86_64-with-glibc2.35",
+    "packages": {
+      "accelerate": "1.14.0",
+      "huggingface-hub": "0.36.2",
+      "numpy": "2.0.2",
+      "pandas": "2.2.3",
+      "peft": "0.17.1",
+      "scikit-learn": "1.6.1",
+      "torch": "2.11.0+cu128",
+      "transformers": "4.53.1"
+    },
+    "gpu": {
+      "name": "Tesla T4",
+      "capability": [
+        7,
+        5
+      ],
+      "cuda_runtime": "12.8"
+    }
+  }
+}

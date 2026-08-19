@@ -505,9 +505,15 @@ def export_modernbert_hybrid_poc(
     setup_name: str = "default",
     safety_loss_weight: float = 1.0,
     oracle_auxiliary_weight: float = 0.25,
+    router_overhead_benchmark: dict[str, object] | None = None,
     config: RouterConfig = DEFAULT_CONFIG,
 ) -> Path:
-    """Save LoRA, both heads, tokenizer, safety policy, and training metadata."""
+    """Save the best checkpoint, policy, and optional router-only timing evidence.
+
+    ``router_overhead_benchmark`` may contain measured ModernBERT latency.  It is
+    diagnostic metadata only: candidate-model latency remains analytical and the
+    timing does not retroactively alter the frozen validation policy.
+    """
 
     output_dir = Path(output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -589,6 +595,7 @@ def export_modernbert_hybrid_poc(
         "deployment_enabled": router_active and poc_passed,
         "latency_source": "analytical_model_profile_and_prompt_tokens",
         "candidate_inference_used_for_latency": False,
+        "router_overhead_benchmark": router_overhead_benchmark,
         "optimization": {
             "encoder_learning_rate": result.encoder_learning_rate,
             "head_learning_rate": result.head_learning_rate,

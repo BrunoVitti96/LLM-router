@@ -32,7 +32,9 @@ def test_hybrid_poc_notebook_is_clean_didactic_and_syntactically_valid():
         "out-of-fold",
         "scenario sensitivity",
         "validation_sensitivity.csv",
-        'SPLIT_MODE = "random"',
+        'RUN_ID = "random_seed_43"',
+        "FROZEN_EXPERIMENT_PLAN",
+        "get_experiment_run",
         "per_dataset_metrics",
         "SETUP_SPECS",
         "setup_comparison.csv",
@@ -46,6 +48,11 @@ def test_hybrid_poc_notebook_is_clean_didactic_and_syntactically_valid():
         "router_was_truncated",
         "early_stopping_patience",
         "router_overhead_sensitivity",
+        "benchmark_modernbert_overhead",
+        "candidate_latency=\"analytical-only\"",
+        "router_overhead_benchmark.export",
+        "create_gradio_demo",
+        "LAUNCH_INTERACTIVE_DEMO",
         "single_run_passed",
         "poc_passed",
         "Train every declared setup",
@@ -63,7 +70,7 @@ def test_hybrid_poc_notebook_is_clean_didactic_and_syntactically_valid():
     assert '-e ".[notebook]"' not in full_text
     assert "sys.path.insert(0, SOURCE_ROOT)" in full_text
     assert 'module_name.startswith("llm_router.")' in full_text
-    assert "import llm_router" in full_text
+    assert 'importlib.import_module("llm_router")' in full_text
     assert full_text.count("%pip install") == 1
     assert "replace-with" not in full_text
     assert 'rglob("bench")' not in full_text

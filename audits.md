@@ -8,6 +8,45 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-08-19 — Multi-seed Colab plan, router-only timing, and demo
+
+The seed-42 schema-v5 run was judged sufficient for a technical feasibility POC
+but insufficient for production or universal-generalization claims. The next
+repository version therefore converts the notebook from a mutable seed/split
+cell into six immutable run IDs: random and dataset-OOD modes at seeds 42, 43,
+and 44. Every run imports the same three training setups and exports a separate
+ZIP. This prevents the loss, gate contract, or setup menu from drifting between
+confirmation runs.
+
+The analytical scenario identity date is frozen at `2026-08-19`, matching the
+completed seed-42 artifact. It no longer changes according to the day a later
+Colab confirmation happens to run.
+
+The notebook now measures only ModernBERT batch-one overhead on deterministic
+validation prompts. It exports model-only and end-to-end p50/p95 distributions;
+candidate LLM latency remains analytical and no candidate is loaded or timed.
+The measurement is diagnostic and is collected after validation policy freeze,
+so it cannot retroactively alter the 4 ms nominal or 20 ms conservative gate.
+For a numerical example, a measured p95 of 30 ms would exceed the seed-42 policy
+break-even value of 26.93 ms even if a 14 ms median remained below it. Both
+numbers must be disclosed.
+
+An analytical-latency inference runtime and Colab Gradio demo were added. The
+demo shows prompt, safety probability, selected model, fallback use, candidate
+latency estimates, measured ModernBERT overhead, and estimated net savings. It
+does not generate an LLM answer. Investor documentation now defines the initial
+commercial customer, current seed-42 evidence and limitations, and funded
+validation milestones with explicit narrow-or-stop outcomes.
+
+No safety label, hybrid-loss equation, candidate profile, quality gate,
+threshold-selection rule, or analytical latency equation changed. The canonical
+notebook's saved seed-42 outputs were cleared because its code changed; the
+completed run remains preserved under
+`results/modernbert_hybrid_random_seed_42_v3/`.
+
+The generated `results/` tree is now excluded from Ruff because it contains
+immutable run artifacts rather than maintained source.
+
 ## 2026-08-19 — Documentation separated from the current specification
 
 The three experiment retrospectives formerly embedded near the top of the
