@@ -1,0 +1,46 @@
+{
+  "name": "analytical-latency-poc",
+  "as_of": "2026-08-17",
+  "latency_method": "analytical",
+  "network_s": 0.08,
+  "router_overhead_s": 0.004,
+  "effective_tflops": 60.0,
+  "memory_bandwidth_gbps": 900.0,
+  "fixed_model_overhead_s": 0.015,
+  "output_base_tokens": 24.0,
+  "output_tokens_per_prompt_token": 0.2,
+  "output_min_tokens": 16,
+  "output_max_tokens": 256,
+  "notes": "POC assumptions, not measured production latency. Replace model names and model-card facts; sensitivity-test the hardware constants.",
+  "models": {
+    "replace-with-autoregressive-model-directory-name": {
+      "input_price_per_million": 0.3,
+      "output_price_per_million": 2.5,
+      "parameters_billions": 1.5,
+      "active_parameters_billions": 1.5,
+      "architecture": "autoregressive",
+      "weight_bits": 16,
+      "queue_s": 0.0
+    },
+    "replace-with-diffusion-model-directory-name": {
+      "input_price_per_million": 0.3,
+      "output_price_per_million": 2.5,
+      "parameters_billions": 1.5,
+      "active_parameters_billions": 1.5,
+      "architecture": "diffusion",
+      "weight_bits": 16,
+      "diffusion_steps": 8,
+      "diffusion_block_size": 8,
+      "queue_s": 0.0
+    },
+    "replace-with-strong-fallback-directory-name": {
+      "input_price_per_million": 1.25,
+      "output_price_per_million": 10.0,
+      "parameters_billions": 7.0,
+      "active_parameters_billions": 7.0,
+      "architecture": "autoregressive",
+      "weight_bits": 4,
+      "queue_s": 0.0
+    }
+  }
+}

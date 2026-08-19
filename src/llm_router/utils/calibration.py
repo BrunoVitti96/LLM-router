@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 import numpy as np
 import torch
 import torch.nn.functional as F
+from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 
 
@@ -50,6 +53,150 @@ def apply_platt(
         calibrated = np.clip(slope * logits[:, column] + intercept, -40, 40)
         probabilities[:, column] = 1 / (1 + np.exp(-calibrated))
     return probabilities
+
+
+def _expected_calibration_error(
+    probabilities: np.ndarray, targets: np.ndarray, bins: int = 10
+) -> float:
+    edges = np.linspace(0.0, 1.0, bins + 1)
+    total = max(1, len(targets))
+    error = 0.0
+    for lower, upper in pairwise(edges):
+        included = (probabilities >= lower) & (
+            probabilities <= upper if upper == 1.0 else probabilities < upper
+        )
+        if included.any():
+            error += included.sum() / total * abs(
+                probabilities[included].mean() - targets[included].mean()
+            )
+    return float(error)
+
+
+def _ranking_diagnostics(
+    probabilities: np.ndarray, targets: np.ndarray
+) -> dict[str, float]:
+    """Measure both safe ranking and the operationally critical unsafe ranking."""
+
+    targets = np.asarray(targets, dtype=int)
+    probabilities = np.asarray(probabilities, dtype=float)
+    if np.unique(targets).size < 2:
+        return {
+            "safe_roc_auc": float("nan"),
+            "safe_average_precision": float(targets.mean()),
+            "unsafe_average_precision": float(1 - targets.mean()),
+        }
+    return {
+        "safe_roc_auc": float(roc_auc_score(targets, probabilities)),
+        "safe_average_precision": float(
+            average_precision_score(targets, probabilities)
+        ),
+        "unsafe_average_precision": float(
+            average_precision_score(1 - targets, 1 - probabilities)
+        ),
+    }
+
+
+def calibrate_with_validation(
+    logits: np.ndarray,
+    targets: np.ndarray,
+    validation_rows: np.ndarray,
+    candidate_names: tuple[str, ...],
+    *,
+    folds: int = 5,
+    seed: int = 42,
+) -> tuple[
+    np.ndarray,
+    dict[str, tuple[float, float]],
+    list[dict[str, float | int | str]],
+]:
+    """Fit deployable Platt scalers and use OOF probabilities on validation.
+
+    Final scalers are fitted on all validation rows and applied to non-validation
+    rows. Validation rows receive out-of-fold probabilities, preventing each
+    example from calibrating its own confidence before threshold selection.
+    """
+
+    logits = np.asarray(logits, dtype=np.float32)
+    targets = np.asarray(targets, dtype=np.float32)
+    validation_rows = np.asarray(validation_rows, dtype=int)
+    if logits.shape != targets.shape or logits.ndim != 2:
+        raise ValueError("Calibration logits and targets must be matching matrices.")
+    if logits.shape[1] != len(candidate_names):
+        raise ValueError("Candidate names do not match calibration columns.")
+    if len(validation_rows) == 0:
+        raise ValueError("Calibration requires at least one validation example.")
+    if (
+        np.any(validation_rows < 0)
+        or np.any(validation_rows >= len(logits))
+        or len(np.unique(validation_rows)) != len(validation_rows)
+    ):
+        raise ValueError("Validation rows must be unique, in-range indices.")
+    if not np.isfinite(logits).all():
+        raise ValueError("Calibration logits must be finite.")
+
+    parameters: dict[str, tuple[float, float]] = {}
+    diagnostics: list[dict[str, float | int | str]] = []
+    final_parameters = []
+    validation_logits = logits[validation_rows]
+    validation_targets = targets[validation_rows]
+    if not np.isin(validation_targets, (0.0, 1.0)).all():
+        raise ValueError("Calibration targets must be binary on validation rows.")
+
+    for column, candidate in enumerate(candidate_names):
+        target = validation_targets[:, column]
+        fitted = fit_platt(validation_logits[:, column], target)
+        parameters[candidate] = fitted
+        final_parameters.append(fitted)
+
+    probabilities = apply_platt(logits, final_parameters)
+    for column, candidate in enumerate(candidate_names):
+        target = validation_targets[:, column].astype(int)
+        raw = 1 / (1 + np.exp(-np.clip(validation_logits[:, column], -40, 40)))
+        calibrated = np.full(len(validation_rows), target.mean(), dtype=float)
+        class_counts = np.bincount(target, minlength=2)
+        fold_count = min(folds, int(class_counts.min()))
+        if fold_count >= 2:
+            splitter = StratifiedKFold(
+                n_splits=fold_count,
+                shuffle=True,
+                random_state=seed + column,
+            )
+            for fit_rows, heldout_rows in splitter.split(validation_logits, target):
+                fitted = fit_platt(
+                    validation_logits[fit_rows, column], target[fit_rows]
+                )
+                calibrated[heldout_rows] = apply_platt(
+                    validation_logits[heldout_rows, column, None], [fitted]
+                )[:, 0]
+        probabilities[validation_rows, column] = calibrated
+        raw_brier = float(np.mean((raw - target) ** 2))
+        calibrated_brier = float(np.mean((calibrated - target) ** 2))
+        constant_brier = float(target.mean() * (1 - target.mean()))
+        ranking = _ranking_diagnostics(calibrated, target)
+        diagnostics.append(
+            {
+                "candidate": candidate,
+                "validation_examples": len(target),
+                "safe_prevalence": float(target.mean()),
+                "constant_brier": constant_brier,
+                "raw_brier": raw_brier,
+                "calibrated_brier": calibrated_brier,
+                "raw_brier_skill": (
+                    1 - raw_brier / constant_brier
+                    if constant_brier > 0
+                    else float("nan")
+                ),
+                "calibrated_brier_skill": (
+                    1 - calibrated_brier / constant_brier
+                    if constant_brier > 0
+                    else float("nan")
+                ),
+                "raw_ece": _expected_calibration_error(raw, target),
+                "calibrated_ece": _expected_calibration_error(calibrated, target),
+                **ranking,
+            }
+        )
+    return probabilities, parameters, diagnostics
 
 
 def out_of_fold_platt(

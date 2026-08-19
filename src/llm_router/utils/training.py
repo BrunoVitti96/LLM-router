@@ -348,6 +348,11 @@ def train_router(
             "validation_quality_retention": (
                 np.nan if epoch_best is None else float(epoch_best.quality_retention)
             ),
+            "validation_quality_retention_lcb": (
+                np.nan
+                if epoch_best is None
+                else float(epoch_best.quality_retention_lcb)
+            ),
             "validation_fallback_usage": (
                 np.nan if epoch_best is None else float(epoch_best.fallback_usage)
             ),

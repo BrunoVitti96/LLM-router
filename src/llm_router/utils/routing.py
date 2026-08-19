@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import itertools
+from statistics import NormalDist
 
 import numpy as np
 import pandas as pd
@@ -69,11 +70,24 @@ def route_metrics(
         chosen_generation >= fallback_generation
     )
     regret = np.maximum(0.0, fallback_q - chosen_q)
+    paired_delta = chosen_q - fallback_q
+    standard_error = (
+        0.0
+        if len(paired_delta) < 2
+        else paired_delta.std(ddof=1) / np.sqrt(len(paired_delta))
+    )
+    lower_delta = paired_delta.mean() - NormalDist().inv_cdf(
+        config.quality_confidence
+    ) * standard_error
+    quality_retention_lcb = (
+        fallback_q.mean() + lower_delta
+    ) / max(fallback_q.mean(), 1e-9)
     return {
         "accuracy": float(chosen_q.mean()),
         "fallback_accuracy": float(fallback_q.mean()),
         "accuracy_delta": float(chosen_q.mean() - fallback_q.mean()),
         "quality_retention": float(chosen_q.mean() / max(fallback_q.mean(), 1e-9)),
+        "quality_retention_lcb": float(quality_retention_lcb),
         "quality_loss_rate": float(np.mean(chosen_q < fallback_q)),
         "mean_quality_regret": float(regret.mean()),
         "p95_quality_regret": float(np.quantile(regret, 0.95, method="higher")),
@@ -131,7 +145,7 @@ def search_selector(
             )
     search = pd.DataFrame(rows)
     feasible = search.loc[
-        search.quality_retention.ge(config.minimum_quality_retention)
+        search.quality_retention_lcb.ge(config.minimum_quality_retention)
         & search.latency_reduction.gt(0)
     ]
     if feasible.empty:

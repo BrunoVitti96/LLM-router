@@ -1,0 +1,9 @@
+{
+  "examples": 14041,
+  "max_input_tokens": 512,
+  "truncated_examples": 474,
+  "truncation_rate": 0.03375827932483441,
+  "router_tokens_p50": 85.0,
+  "router_tokens_p95": 463.0,
+  "router_tokens_max": 1408
+}

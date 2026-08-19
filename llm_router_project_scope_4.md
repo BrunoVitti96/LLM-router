@@ -1,12 +1,19 @@
 # Decision-Aligned Quality-Preserving LLM Router
 
+> Historical measured-latency experiment. The recommended POC is now the
+> hybrid ModernBERT safety-routing workflow documented in `README.md`: it uses
+> pre-collected quality outcomes and analytical latency derived from model size,
+> architecture, precision, hardware assumptions, and prompt size. This v4 scope
+> is retained only to reproduce the earlier measured-latency comparison.
+
 ## Goal
 
 Build a prompt-only router that reuses the completed v3 candidate measurements
 and learns when a faster open-weight model can replace the strongest model
 without materially reducing answer quality. The v4 experiment is successful
-only when sealed-test accuracy is at least **98% of the strongest training-model
-baseline** and warm batch-size-one latency, including router overhead, is lower.
+only when the one-sided 95% lower confidence bound for sealed-test accuracy
+retention is at least **98% of the strongest training-model baseline** and warm
+batch-size-one latency, including router overhead, is lower.
 
 V4 does not regenerate candidate answers. It treats the v3 prompt pool and its
 2,700 fingerprinted measurements as an immutable offline decision dataset. This
@@ -229,7 +236,8 @@ selector:
 2. obtain out-of-fold Platt-calibrated safety probabilities;
 3. search candidate-specific thresholds and latency blend coefficients;
 4. add measured per-prompt router overhead to selected generation latency;
-5. reject settings below 98% quality retention or without positive net savings;
+5. reject settings whose one-sided 95% retention lower confidence bound is below
+   98%, or which do not have positive net savings;
 6. among feasible settings, maximize latency reduction, then minimize observed
    quality-loss rate, then prefer higher thresholds.
 
@@ -261,7 +269,7 @@ outcomes only for retrospective comparison.
 Activate the router only if the selected validation configuration has:
 
 ```text
-quality retention >= 0.98
+one-sided 95% quality-retention LCB >= 0.98
 net latency reduction > 0
 ```
 
