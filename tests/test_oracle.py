@@ -143,6 +143,12 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
     assert result.safety_logits.shape == (len(panel.examples), 1)
     assert set(result.calibration_parameters) == {"fast"}
     assert result.calibration_diagnostics.candidate.tolist() == ["fast"]
+    assert {
+        "constant_brier",
+        "calibrated_brier_skill",
+        "safe_roc_auc",
+        "unsafe_average_precision",
+    }.issubset(result.calibration_diagnostics.columns)
     assert set(result.safety_pos_weights) == {"fast"}
     assert np.allclose(
         result.safety_probabilities[:, result.fallback_index], 1.0
@@ -157,3 +163,5 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
     assert result.epochs_completed == 1
     assert not result.stopped_early
     assert result.input_diagnostics["examples"] == len(panel.examples)
+    assert result.router_input_lengths.shape == (len(panel.examples),)
+    assert result.router_was_truncated.shape == (len(panel.examples),)

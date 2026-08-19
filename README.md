@@ -63,6 +63,48 @@ before router overhead. With the assumed 4 ms router cost, net savings were
 44.7 ms. A real 20 ms router cost would reduce the same frozen policy to about
 28.7 ms of savings, while an overhead near 48.7 ms would erase the benefit.
 
+## What changed after the completed seed-42 review
+
+The completed seed-42 notebook remains a useful historical baseline: it routed
+634 of 2,812 test prompts, gained 54 answers, lost 48, and finished six correct
+answers ahead of fallback. However, 20 of those net gains came from MBPP while
+ARC-Challenge, FinQA, and GPQA lost 6, 5, and 2 answers respectively. Aggregate
+quality therefore hid task-mix sensitivity.
+
+New runs use a stricter schema-v4 policy contract. In plain language, a router
+must now be safe overall, avoid large benchmark-group regressions, keep its
+harm uncertainty controlled, and remain useful when routing takes longer than
+the optimistic estimate. The notebook predeclares these additional gates:
+
+- macro-dataset quality-retention LCB at least 98%;
+- quality-loss-rate one-sided 95% UCL at most 2.5%;
+- routed-safety-precision one-sided 95% LCB at least 90%;
+- worst quality-retention LCB at least 90% among datasets with at least 100
+  evaluation prompts; and
+- positive analytical savings at both the nominal 4 ms and conservative 20 ms
+  router overheads.
+
+The 100-prompt rule keeps an 11-example dataset from controlling the entire
+experiment through a very wide confidence interval. It is a catastrophic-harm
+floor, not a replacement for the stricter 98% aggregate and macro gates. For
+example, a 92% routed-safety point estimate with an 89% lower bound now fails,
+even though the point estimate alone looks acceptable.
+
+Because the guarded value is the worst of several eligible datasets, its
+per-dataset confidence bounds use a Bonferroni adjustment. With ten guarded
+datasets and 95% desired family-wise confidence, each one-sided bound is
+calculated at $1-(1-0.95)/10=99.5\%$. This is deliberately more conservative
+than taking the smallest of ten ordinary 95% bounds.
+
+Reports now include the Wilson lower bound on routed safety precision,
+safe-opportunity recall, conservative-overhead savings, worst guarded-dataset
+retention, every candidate's calibrated safety probability, and per-prompt
+ModernBERT token length and truncation status. Calibration diagnostics also
+include the constant-prior Brier baseline, Brier skill, ROC AUC, and safe and
+unsafe average precision. The saved seed-42 artifact remains schema v3; reruns
+with the updated code produce schema v4 and must not be compared as if the
+pass/fail contracts were identical.
+
 ## Routing logic
 
 ```mermaid
@@ -77,7 +119,7 @@ flowchart LR
     T --> E
     E -->|"Eligible alternatives"| A["Choose lowest analytical latency"]
     E -->|"None"| B["Choose training-selected fallback"]
-    A --> G{"Validation LCB ≥ 98% and net savings > 0?"}
+    A --> G{"All aggregate, group, harm, precision, and overhead gates pass?"}
     B --> G
     G -->|"Pass"| D["Activate frozen policy"]
     G -->|"Fail"| X["Fallback-only policy"]
@@ -124,6 +166,21 @@ $$
 
 The sealed-test pass criterion remains 0.98. The margin is not added to the test
 after results are seen; it is a predeclared guard against validation optimism.
+
+Schema-v4 threshold selection additionally requires:
+
+$$
+\begin{aligned}
+\operatorname{LCB}_{95\%,macro} &\ge 0.98,\\
+\operatorname{UCL}_{95\%}(P(\text{quality loss})) &\le 0.025,\\
+\operatorname{LCB}_{95\%}(P(\text{safe}\mid\text{routed})) &\ge 0.90,\\
+\min_{d:\,N_d\ge100}\operatorname{LCB}_{95\%,d} &\ge 0.90.
+\end{aligned}
+$$
+
+Net analytical savings must also stay positive when router overhead is replaced
+by the conservative 20 ms assumption. These are configurable command-line and
+Python parameters, but their chosen values must be frozen before opening test.
 
 ## LOSS
 
@@ -364,6 +421,13 @@ The report directory contains:
 - `modernbert_router/input_diagnostics.json`;
 - exported Platt parameters, LoRA adapter, heads, tokenizer, and router manifest.
 
+Schema-v4 `test_decisions.parquet` also stores `safety_probability__<model>` for
+every candidate plus `router_input_tokens` and `router_was_truncated`. Thus, if
+48 routes are harmful, the report can show whether they were high-confidence
+errors or disproportionately truncated prompts. `strategy_summary.csv` and
+`threshold_search.csv` add routed-precision LCB, safe-opportunity recall,
+guarded-dataset retention, and conservative-overhead savings.
+
 `poc_passed` is true only when the frozen policy also passes every sealed-test
 quality, savings, and non-trivial-routing criterion. Failure reasons are written
 explicitly; a fallback-only result is not a successful router. The exported
@@ -383,6 +447,12 @@ llm-router-benchmark \
   --split-mode random \
   --router modernbert-hybrid \
   --epochs 5 \
+  --minimum-macro-quality-retention 0.98 \
+  --maximum-quality-loss-rate-ucl 0.025 \
+  --minimum-routed-safety-precision-lcb 0.90 \
+  --minimum-guarded-dataset-quality-retention-lcb 0.90 \
+  --minimum-guarded-dataset-prompts 100 \
+  --conservative-router-overhead-ms 20 \
   --output-dir reports_benchmark/random_seed_42
 ```
 
@@ -410,7 +480,10 @@ llm-router-benchmark \
 - the sealed-test 95% quality-retention LCB is at least 98%;
 - the random split is disjoint by normalized prompt content, not only record ID;
 - per-dataset retention and the harm-rate upper bound are reported;
+- macro retention, routed-precision LCB, and the guarded worst-dataset floor
+  pass their predeclared gates;
 - net analytical savings remain positive after router overhead;
+- net analytical savings also remain positive at the conservative overhead;
 - random feasibility passes across several seeds; and
 - dataset-OOD results are reported separately and honestly.
 

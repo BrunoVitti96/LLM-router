@@ -39,6 +39,8 @@ class ModernBERTHybridPOCResult:
     nonfallback_indices: np.ndarray
     history: pd.DataFrame
     input_diagnostics: dict[str, float | int]
+    router_input_lengths: np.ndarray
+    router_was_truncated: np.ndarray
     encoder_learning_rate: float
     head_learning_rate: float
     minimum_epochs: int
@@ -384,6 +386,8 @@ def train_modernbert_hybrid_poc(
         nonfallback_indices=nonfallback_indices,
         history=pd.DataFrame(history),
         input_diagnostics=input_diagnostics,
+        router_input_lengths=input_lengths,
+        router_was_truncated=truncated,
         encoder_learning_rate=learning_rate,
         head_learning_rate=head_learning_rate,
         minimum_epochs=minimum_epochs,
@@ -406,6 +410,12 @@ def export_modernbert_hybrid_poc(
     failure_reasons: tuple[str, ...] = (),
     minimum_predicted_savings: float = 0.02,
     validation_quality_margin: float = 0.0,
+    minimum_macro_quality_retention: float | None = None,
+    maximum_quality_loss_rate_ucl: float | None = None,
+    minimum_routed_safety_precision_lcb: float | None = None,
+    minimum_guarded_dataset_quality_retention_lcb: float | None = None,
+    minimum_guarded_dataset_prompts: int = 0,
+    conservative_router_overhead_s: float = 0.0,
     safety_loss_weight: float = 1.0,
     oracle_auxiliary_weight: float = 0.25,
     config: RouterConfig = DEFAULT_CONFIG,
@@ -434,7 +444,7 @@ def export_modernbert_hybrid_poc(
         model_names[index] for index in result.nonfallback_indices
     )
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "router": "ModernBERT hybrid safety router",
         "deployed_prediction": "fallback-relative replacement safety",
         "oracle_role": "training-only auxiliary loss",
@@ -462,6 +472,18 @@ def export_modernbert_hybrid_poc(
         },
         "minimum_predicted_savings": minimum_predicted_savings,
         "validation_quality_margin": validation_quality_margin,
+        "policy_gates": {
+            "minimum_macro_quality_retention": minimum_macro_quality_retention,
+            "maximum_quality_loss_rate_ucl": maximum_quality_loss_rate_ucl,
+            "minimum_routed_safety_precision_lcb": (
+                minimum_routed_safety_precision_lcb
+            ),
+            "minimum_guarded_dataset_quality_retention_lcb": (
+                minimum_guarded_dataset_quality_retention_lcb
+            ),
+            "minimum_guarded_dataset_prompts": minimum_guarded_dataset_prompts,
+            "conservative_router_overhead_s": conservative_router_overhead_s,
+        },
         "validation_router_active": router_active,
         "poc_passed": poc_passed,
         "failure_reasons": failure_reasons,

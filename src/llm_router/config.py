@@ -49,6 +49,13 @@ class RouterConfig:
     quality_confidence: float = 0.95
     quality_safety_epsilon: float = 0.0
     minimum_predicted_speedup: float = 0.02
+    validation_quality_margin: float = 0.01
+    minimum_macro_quality_retention: float = 0.98
+    maximum_quality_loss_rate_ucl: float = 0.025
+    minimum_routed_safety_precision_lcb: float = 0.90
+    minimum_guarded_dataset_quality_retention_lcb: float = 0.90
+    minimum_guarded_dataset_prompts: int = 100
+    conservative_router_overhead_s: float = 0.020
     safety_definition: str = "candidate_quality >= fallback_quality - epsilon"
 
     encoder_repo: str = "nomic-ai/modernbert-embed-base"
@@ -98,6 +105,13 @@ class RouterConfig:
         assert self.n_per_task == 300 and len(self.tasks) == 3
         assert self.minimum_quality_retention == 0.98
         assert self.quality_confidence == 0.95
+        assert self.validation_quality_margin == 0.01
+        assert self.minimum_macro_quality_retention == 0.98
+        assert self.maximum_quality_loss_rate_ucl == 0.025
+        assert self.minimum_routed_safety_precision_lcb == 0.90
+        assert self.minimum_guarded_dataset_quality_retention_lcb == 0.90
+        assert self.minimum_guarded_dataset_prompts == 100
+        assert self.conservative_router_overhead_s == 0.020
         assert self.lora_r == 4 and self.lora_alpha == 8
         assert self.lora_target_modules == "all-linear"
         assert self.max_input_tokens == 512
@@ -121,6 +135,27 @@ class RouterConfig:
             "minimum_quality_retention": self.minimum_quality_retention,
             "quality_confidence": self.quality_confidence,
             "minimum_predicted_speedup": self.minimum_predicted_speedup,
+            "policy_gates": {
+                "validation_quality_margin": self.validation_quality_margin,
+                "minimum_macro_quality_retention": (
+                    self.minimum_macro_quality_retention
+                ),
+                "maximum_quality_loss_rate_ucl": (
+                    self.maximum_quality_loss_rate_ucl
+                ),
+                "minimum_routed_safety_precision_lcb": (
+                    self.minimum_routed_safety_precision_lcb
+                ),
+                "minimum_guarded_dataset_quality_retention_lcb": (
+                    self.minimum_guarded_dataset_quality_retention_lcb
+                ),
+                "minimum_guarded_dataset_prompts": (
+                    self.minimum_guarded_dataset_prompts
+                ),
+                "conservative_router_overhead_s": (
+                    self.conservative_router_overhead_s
+                ),
+            },
             "encoder_repo": self.encoder_repo,
             "encoder_revision": self.encoder_revision,
             "router_max_input_tokens": self.max_input_tokens,

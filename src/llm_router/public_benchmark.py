@@ -195,6 +195,12 @@ class PublicBenchmarkResult:
     minimum_quality_retention: float
     confidence: float
     validation_quality_margin: float = 0.0
+    minimum_macro_quality_retention: float | None = None
+    maximum_quality_loss_rate_ucl: float | None = None
+    minimum_routed_safety_precision_lcb: float | None = None
+    minimum_guarded_dataset_quality_retention_lcb: float | None = None
+    minimum_guarded_dataset_prompts: int = 0
+    conservative_router_overhead_s: float = 0.0
     router_name: str = "tfidf_safety_router"
 
 
@@ -587,6 +593,27 @@ def _binomial_rate_ucl(events: np.ndarray, confidence: float) -> float:
     return float(min(1.0, center + margin))
 
 
+def _binomial_rate_lcb(events: np.ndarray, confidence: float) -> float:
+    """Wilson one-sided lower bound for a binary event rate."""
+
+    events = np.asarray(events, dtype=bool)
+    if len(events) == 0:
+        return 1.0
+    probability = float(events.mean())
+    z = NormalDist().inv_cdf(confidence)
+    z2_over_n = z * z / len(events)
+    center = (probability + z * z / (2 * len(events))) / (1 + z2_over_n)
+    margin = (
+        z
+        * np.sqrt(
+            probability * (1 - probability) / len(events)
+            + z * z / (4 * len(events) ** 2)
+        )
+        / (1 + z2_over_n)
+    )
+    return float(max(0.0, center - margin))
+
+
 def _macro_dataset_retention(
     indices: np.ndarray,
     selected_score: np.ndarray,
@@ -611,6 +638,48 @@ def _macro_dataset_retention(
     return float(values.mean()), float(lower), len(values)
 
 
+def _guarded_dataset_retention(
+    indices: np.ndarray,
+    selected_score: np.ndarray,
+    fallback_score: np.ndarray,
+    panel: BenchmarkPanel,
+    confidence: float,
+    minimum_prompts: int,
+) -> tuple[float, float, int]:
+    """Return the worst sufficiently large dataset's retention and LCB.
+
+    Tiny benchmark slices produce unstable confidence bounds. The guard therefore
+    applies only to datasets with at least ``minimum_prompts`` examples, while the
+    complete per-dataset report still includes every dataset. Individual bounds
+    use a Bonferroni adjustment because the minimum selects the worst of several
+    datasets.
+    """
+
+    labels = panel.examples.dataset.iloc[indices].to_numpy()
+    retained: list[float] = []
+    score_pairs: list[tuple[np.ndarray, np.ndarray]] = []
+    for dataset in np.unique(labels):
+        included = labels == dataset
+        if included.sum() < minimum_prompts:
+            continue
+        fallback_subset = fallback_score[included]
+        if fallback_subset.mean() <= 1e-12:
+            continue
+        selected_subset = selected_score[included]
+        retained.append(float(selected_subset.mean() / fallback_subset.mean()))
+        score_pairs.append((selected_subset, fallback_subset))
+    if not retained:
+        return 1.0, 1.0, 0
+    # The reported value is the minimum across several datasets. A Bonferroni
+    # adjustment keeps the family-wise one-sided coverage at ``confidence``.
+    simultaneous_confidence = 1 - (1 - confidence) / len(score_pairs)
+    lower_bounds = [
+        _quality_retention_lcb(selected, fallback, simultaneous_confidence)
+        for selected, fallback in score_pairs
+    ]
+    return float(min(retained)), float(min(lower_bounds)), len(retained)
+
+
 def _route_metrics(
     indices: np.ndarray,
     choices: np.ndarray,
@@ -619,20 +688,48 @@ def _route_metrics(
     fallback_idx: int,
     confidence: float,
     overhead: float = 0.0,
+    conservative_overhead: float = 0.0,
     quality_epsilon: float = 0.0,
+    minimum_guarded_dataset_prompts: int = 0,
 ) -> dict[str, float]:
     rows = np.arange(len(indices))
     selected_score = panel.score[indices][rows, choices]
     fallback_score = panel.score[indices, fallback_idx]
-    selected_resource = resource[indices][rows, choices] + overhead
+    selected_resource_without_router = resource[indices][rows, choices]
+    selected_resource = selected_resource_without_router + overhead
     fallback_resource = resource[indices, fallback_idx]
     quality_lost = selected_score < fallback_score - quality_epsilon
     routed = choices != fallback_idx
     routed_safety_precision = (
         float((~quality_lost[routed]).mean()) if routed.any() else 1.0
     )
+    routed_safety_precision_lcb = _binomial_rate_lcb(
+        ~quality_lost[routed], confidence
+    )
+    nonfallback = np.arange(resource.shape[1]) != fallback_idx
+    safe_alternative = panel.score[indices] >= (
+        fallback_score[:, None] - quality_epsilon
+    )
+    faster_alternative = resource[indices] < fallback_resource[:, None]
+    safe_faster_opportunity = (
+        safe_alternative & faster_alternative & nonfallback[None, :]
+    ).any(axis=1)
+    safely_routed = routed & ~quality_lost
+    safe_opportunity_recall = (
+        float(safely_routed.sum() / safe_faster_opportunity.sum())
+        if safe_faster_opportunity.any()
+        else 1.0
+    )
     macro_retention, macro_lcb, macro_count = _macro_dataset_retention(
         indices, selected_score, fallback_score, panel, confidence
+    )
+    guarded_retention, guarded_lcb, guarded_count = _guarded_dataset_retention(
+        indices,
+        selected_score,
+        fallback_score,
+        panel,
+        confidence,
+        minimum_guarded_dataset_prompts,
     )
     return {
         "quality": float(selected_score.mean()),
@@ -646,14 +743,24 @@ def _route_metrics(
         "quality_loss_rate": float(quality_lost.mean()),
         "quality_loss_rate_ucl": _binomial_rate_ucl(quality_lost, confidence),
         "routed_safety_precision": routed_safety_precision,
+        "routed_safety_precision_lcb": routed_safety_precision_lcb,
+        "safe_opportunity_recall": safe_opportunity_recall,
         "routed_fraction": float(routed.mean()),
         "macro_dataset_quality_retention": macro_retention,
         "macro_dataset_quality_retention_lcb": macro_lcb,
         "macro_dataset_count": float(macro_count),
+        "guarded_dataset_quality_retention": guarded_retention,
+        "guarded_dataset_quality_retention_lcb": guarded_lcb,
+        "guarded_dataset_count": float(guarded_count),
         "mean_resource": float(selected_resource.mean()),
         "fallback_resource": float(fallback_resource.mean()),
         "resource_savings": float(
             1.0 - selected_resource.mean() / max(fallback_resource.mean(), 1e-12)
+        ),
+        "conservative_resource_savings": float(
+            1.0
+            - (selected_resource_without_router.mean() + conservative_overhead)
+            / max(fallback_resource.mean(), 1e-12)
         ),
         "fallback_usage": float(np.mean(choices == fallback_idx)),
     }
@@ -814,14 +921,23 @@ def run_public_benchmark(
     threshold_grid: Iterable[float] = DEFAULT_THRESHOLD_GRID,
     validation_quality_margin: float = 0.0,
     router_overhead_s: float = 0.0,
+    conservative_router_overhead_s: float | None = None,
+    minimum_macro_quality_retention: float | None = None,
+    maximum_quality_loss_rate_ucl: float | None = None,
+    minimum_routed_safety_precision_lcb: float | None = None,
+    minimum_guarded_dataset_quality_retention_lcb: float | None = None,
+    minimum_guarded_dataset_prompts: int = 0,
     seed: int = 42,
     routing_probabilities: np.ndarray | None = None,
     router_name: str | None = None,
+    decision_metadata: dict[str, np.ndarray] | None = None,
 ) -> PublicBenchmarkResult:
     """Run headroom analysis and a sealed-test routing experiment.
 
-    Thresholds are selected on validation using a one-sided confidence bound.
-    Test outcomes are opened once after the threshold and activation guard freeze.
+    Thresholds are selected on validation using predeclared aggregate, subgroup,
+    harm, routed-precision, and conservative-overhead gates. Test outcomes are
+    opened once after the threshold and activation guard freeze. Optional decision
+    metadata is copied only after selection and cannot affect the policy.
     """
     if objective not in {"cost", "latency"}:
         raise ValueError("Objective must be 'cost' or 'latency'.")
@@ -829,8 +945,32 @@ def run_public_benchmark(
         raise ValueError("confidence must be between 0.5 and 1.0.")
     if validation_quality_margin < 0:
         raise ValueError("validation_quality_margin cannot be negative.")
+    bounded_rates = {
+        "minimum_macro_quality_retention": minimum_macro_quality_retention,
+        "maximum_quality_loss_rate_ucl": maximum_quality_loss_rate_ucl,
+        "minimum_routed_safety_precision_lcb": (
+            minimum_routed_safety_precision_lcb
+        ),
+        "minimum_guarded_dataset_quality_retention_lcb": (
+            minimum_guarded_dataset_quality_retention_lcb
+        ),
+    }
+    for name, value in bounded_rates.items():
+        if value is not None and not 0.0 <= value <= 1.0:
+            raise ValueError(f"{name} must be in [0, 1] when provided.")
+    if minimum_guarded_dataset_prompts < 0:
+        raise ValueError("minimum_guarded_dataset_prompts cannot be negative.")
+    if conservative_router_overhead_s is None:
+        conservative_router_overhead_s = router_overhead_s
+    if conservative_router_overhead_s < router_overhead_s:
+        raise ValueError(
+            "conservative_router_overhead_s cannot be below router_overhead_s."
+        )
     resource = panel.cost if objective == "cost" else panel.latency
     overhead = router_overhead_s if objective == "latency" else 0.0
+    conservative_overhead = (
+        conservative_router_overhead_s if objective == "latency" else 0.0
+    )
     fallback_idx = int(panel.score[split.train].mean(axis=0).argmax())
     fallback_model = panel.models[fallback_idx]
     if routing_probabilities is None:
@@ -875,15 +1015,37 @@ def run_public_benchmark(
             fallback_idx,
             confidence,
             overhead,
+            conservative_overhead,
             quality_epsilon,
+            minimum_guarded_dataset_prompts,
         )
         search_rows.append({"threshold": float(threshold), **metrics})
     threshold_search = pd.DataFrame(search_rows)
     validation_quality_target = minimum_quality_retention + validation_quality_margin
-    feasible = threshold_search.loc[
+    feasible_mask = (
         threshold_search.quality_retention_lcb.ge(validation_quality_target)
         & threshold_search.resource_savings.gt(0)
-    ]
+        & threshold_search.conservative_resource_savings.gt(0)
+    )
+    if minimum_macro_quality_retention is not None:
+        feasible_mask &= threshold_search.macro_dataset_quality_retention_lcb.ge(
+            minimum_macro_quality_retention
+        )
+    if maximum_quality_loss_rate_ucl is not None:
+        feasible_mask &= threshold_search.quality_loss_rate_ucl.le(
+            maximum_quality_loss_rate_ucl
+        )
+    if minimum_routed_safety_precision_lcb is not None:
+        feasible_mask &= threshold_search.routed_safety_precision_lcb.ge(
+            minimum_routed_safety_precision_lcb
+        )
+    if minimum_guarded_dataset_quality_retention_lcb is not None:
+        feasible_mask &= (
+            threshold_search.guarded_dataset_quality_retention_lcb.ge(
+                minimum_guarded_dataset_quality_retention_lcb
+            )
+        )
+    feasible = threshold_search.loc[feasible_mask]
     if feasible.empty:
         router_active = False
         selected_threshold = 1.1
@@ -931,7 +1093,9 @@ def run_public_benchmark(
                 fallback_idx,
                 confidence,
                 strategy_overhead,
+                conservative_overhead if name == router_name else 0.0,
                 quality_epsilon,
+                minimum_guarded_dataset_prompts,
             )
             for name, (choices, strategy_overhead) in strategies.items()
         }
@@ -964,7 +1128,9 @@ def run_public_benchmark(
                         fallback_idx,
                         confidence,
                         strategy_overhead,
+                        conservative_overhead if strategy_name == router_name else 0.0,
                         quality_epsilon,
+                        minimum_guarded_dataset_prompts,
                     ),
                 }
             )
@@ -973,7 +1139,10 @@ def run_public_benchmark(
     router_metrics = summary.loc[router_name]
     if objective == "latency":
         overhead_values_s = np.unique(
-            np.array([overhead, 0.010, 0.020, 0.050], dtype=float)
+            np.array(
+                [overhead, conservative_overhead, 0.010, 0.020, 0.050],
+                dtype=float,
+            )
         )
         if router_active:
             gross_saved_s = float(
@@ -1004,13 +1173,45 @@ def run_public_benchmark(
     failure_reasons = []
     if not router_active:
         failure_reasons.append(
-            "No validation threshold met both the buffered quality LCB target "
-            f"({validation_quality_target:.3f}) and net-savings gate."
+            "No validation threshold met every configured aggregate, subgroup, "
+            "harm, routed-precision, and conservative-overhead gate."
         )
     if router_metrics.quality_retention_lcb < minimum_quality_retention:
         failure_reasons.append("Sealed-test quality retention missed its LCB gate.")
     if router_metrics.resource_savings <= 0:
         failure_reasons.append("Sealed-test net analytical savings were not positive.")
+    if router_metrics.conservative_resource_savings <= 0:
+        failure_reasons.append(
+            "Sealed-test analytical savings were not positive under the "
+            "conservative router-overhead assumption."
+        )
+    if (
+        minimum_macro_quality_retention is not None
+        and router_metrics.macro_dataset_quality_retention_lcb
+        < minimum_macro_quality_retention
+    ):
+        failure_reasons.append("Sealed-test macro-dataset quality missed its LCB gate.")
+    if (
+        maximum_quality_loss_rate_ucl is not None
+        and router_metrics.quality_loss_rate_ucl > maximum_quality_loss_rate_ucl
+    ):
+        failure_reasons.append("Sealed-test quality-loss rate exceeded its UCL gate.")
+    if (
+        minimum_routed_safety_precision_lcb is not None
+        and router_metrics.routed_safety_precision_lcb
+        < minimum_routed_safety_precision_lcb
+    ):
+        failure_reasons.append(
+            "Sealed-test routed safety precision missed its LCB gate."
+        )
+    if (
+        minimum_guarded_dataset_quality_retention_lcb is not None
+        and router_metrics.guarded_dataset_quality_retention_lcb
+        < minimum_guarded_dataset_quality_retention_lcb
+    ):
+        failure_reasons.append(
+            "Sealed-test guarded-dataset quality missed its worst-group LCB gate."
+        )
     if router_metrics.fallback_usage >= 1.0 - 1e-12:
         failure_reasons.append("The sealed-test policy routed every prompt to fallback.")
     poc_passed = not failure_reasons
@@ -1032,6 +1233,20 @@ def run_public_benchmark(
     decisions["selected_routing_probability"] = probability[split.test][
         rows, selected_test
     ]
+    for model_index, model_name in enumerate(panel.models):
+        decisions[f"safety_probability__{model_name}"] = probability[
+            split.test, model_index
+        ]
+    if decision_metadata:
+        for column, values in decision_metadata.items():
+            if column in decisions:
+                raise ValueError(f"Decision metadata would overwrite {column!r}.")
+            values = np.asarray(values)
+            if len(values) != len(panel.examples):
+                raise ValueError(
+                    f"Decision metadata {column!r} must have one value per prompt."
+                )
+            decisions[column] = values[split.test]
     candidate_diagnostics = _candidate_diagnostics(
         panel, split, resource, fallback_idx, quality_epsilon
     )
@@ -1053,6 +1268,16 @@ def run_public_benchmark(
         minimum_quality_retention=minimum_quality_retention,
         confidence=confidence,
         validation_quality_margin=validation_quality_margin,
+        minimum_macro_quality_retention=minimum_macro_quality_retention,
+        maximum_quality_loss_rate_ucl=maximum_quality_loss_rate_ucl,
+        minimum_routed_safety_precision_lcb=(
+            minimum_routed_safety_precision_lcb
+        ),
+        minimum_guarded_dataset_quality_retention_lcb=(
+            minimum_guarded_dataset_quality_retention_lcb
+        ),
+        minimum_guarded_dataset_prompts=minimum_guarded_dataset_prompts,
+        conservative_router_overhead_s=conservative_overhead,
         router_name=router_name,
     )
 
@@ -1078,7 +1303,7 @@ def export_public_benchmark(
         output_dir / "test_router_overhead_sensitivity.csv", index=False
     )
     manifest = {
-        "schema_version": 3,
+        "schema_version": 4,
         "poc_passed": result.poc_passed,
         "failure_reasons": result.failure_reasons,
         "success_criteria": {
@@ -1087,11 +1312,31 @@ def export_public_benchmark(
             "validation_quality_target": (
                 result.minimum_quality_retention + result.validation_quality_margin
             ),
+            "minimum_macro_quality_retention": (
+                result.minimum_macro_quality_retention
+            ),
+            "maximum_quality_loss_rate_ucl": result.maximum_quality_loss_rate_ucl,
+            "minimum_routed_safety_precision_lcb": (
+                result.minimum_routed_safety_precision_lcb
+            ),
+            "minimum_guarded_dataset_quality_retention_lcb": (
+                result.minimum_guarded_dataset_quality_retention_lcb
+            ),
+            "minimum_guarded_dataset_prompts": (
+                result.minimum_guarded_dataset_prompts
+            ),
+            "conservative_router_overhead_s": (
+                result.conservative_router_overhead_s
+            ),
             "one_sided_confidence": result.confidence,
             "requires_positive_net_resource_savings": True,
+            "requires_positive_conservative_resource_savings": True,
             "requires_nontrivial_routing": True,
             "reports_macro_dataset_retention": True,
             "reports_quality_loss_rate_ucl": True,
+            "reports_routed_safety_precision_lcb": True,
+            "reports_safe_opportunity_recall": True,
+            "reports_full_candidate_probabilities": True,
         },
         "objective": result.objective,
         "router_name": result.router_name,

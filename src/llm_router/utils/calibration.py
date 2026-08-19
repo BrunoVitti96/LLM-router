@@ -7,6 +7,7 @@ from itertools import pairwise
 import numpy as np
 import torch
 import torch.nn.functional as F
+from sklearn.metrics import average_precision_score, roc_auc_score
 from sklearn.model_selection import StratifiedKFold
 
 
@@ -69,6 +70,30 @@ def _expected_calibration_error(
                 probabilities[included].mean() - targets[included].mean()
             )
     return float(error)
+
+
+def _ranking_diagnostics(
+    probabilities: np.ndarray, targets: np.ndarray
+) -> dict[str, float]:
+    """Measure both safe ranking and the operationally critical unsafe ranking."""
+
+    targets = np.asarray(targets, dtype=int)
+    probabilities = np.asarray(probabilities, dtype=float)
+    if np.unique(targets).size < 2:
+        return {
+            "safe_roc_auc": float("nan"),
+            "safe_average_precision": float(targets.mean()),
+            "unsafe_average_precision": float(1 - targets.mean()),
+        }
+    return {
+        "safe_roc_auc": float(roc_auc_score(targets, probabilities)),
+        "safe_average_precision": float(
+            average_precision_score(targets, probabilities)
+        ),
+        "unsafe_average_precision": float(
+            average_precision_score(1 - targets, 1 - probabilities)
+        ),
+    }
 
 
 def calibrate_with_validation(
@@ -144,15 +169,31 @@ def calibrate_with_validation(
                     validation_logits[heldout_rows, column, None], [fitted]
                 )[:, 0]
         probabilities[validation_rows, column] = calibrated
+        raw_brier = float(np.mean((raw - target) ** 2))
+        calibrated_brier = float(np.mean((calibrated - target) ** 2))
+        constant_brier = float(target.mean() * (1 - target.mean()))
+        ranking = _ranking_diagnostics(calibrated, target)
         diagnostics.append(
             {
                 "candidate": candidate,
                 "validation_examples": len(target),
                 "safe_prevalence": float(target.mean()),
-                "raw_brier": float(np.mean((raw - target) ** 2)),
-                "calibrated_brier": float(np.mean((calibrated - target) ** 2)),
+                "constant_brier": constant_brier,
+                "raw_brier": raw_brier,
+                "calibrated_brier": calibrated_brier,
+                "raw_brier_skill": (
+                    1 - raw_brier / constant_brier
+                    if constant_brier > 0
+                    else float("nan")
+                ),
+                "calibrated_brier_skill": (
+                    1 - calibrated_brier / constant_brier
+                    if constant_brier > 0
+                    else float("nan")
+                ),
                 "raw_ece": _expected_calibration_error(raw, target),
                 "calibrated_ece": _expected_calibration_error(calibrated, target),
+                **ranking,
             }
         )
     return probabilities, parameters, diagnostics

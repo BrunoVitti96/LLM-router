@@ -65,11 +65,42 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--validation-quality-margin",
         type=float,
-        default=0.01,
+        default=DEFAULT_CONFIG.validation_quality_margin,
         help=(
             "Extra validation LCB margin above the sealed-test quality gate. "
             "For example, 0.01 selects at 99%% before testing against 98%%."
         ),
+    )
+    parser.add_argument(
+        "--minimum-macro-quality-retention",
+        type=float,
+        default=DEFAULT_CONFIG.minimum_macro_quality_retention,
+    )
+    parser.add_argument(
+        "--maximum-quality-loss-rate-ucl",
+        type=float,
+        default=DEFAULT_CONFIG.maximum_quality_loss_rate_ucl,
+    )
+    parser.add_argument(
+        "--minimum-routed-safety-precision-lcb",
+        type=float,
+        default=DEFAULT_CONFIG.minimum_routed_safety_precision_lcb,
+    )
+    parser.add_argument(
+        "--minimum-guarded-dataset-quality-retention-lcb",
+        type=float,
+        default=DEFAULT_CONFIG.minimum_guarded_dataset_quality_retention_lcb,
+    )
+    parser.add_argument(
+        "--minimum-guarded-dataset-prompts",
+        type=int,
+        default=DEFAULT_CONFIG.minimum_guarded_dataset_prompts,
+    )
+    parser.add_argument(
+        "--conservative-router-overhead-ms",
+        type=float,
+        default=DEFAULT_CONFIG.conservative_router_overhead_s * 1_000,
+        help="Router overhead that must still leave positive analytical savings.",
     )
     parser.add_argument("--device", help="Optional torch device, e.g. cuda or cpu.")
     parser.add_argument("--output-dir", default="reports_benchmark")
@@ -131,9 +162,30 @@ def main(argv: list[str] | None = None) -> int:
         confidence=args.confidence,
         validation_quality_margin=args.validation_quality_margin,
         router_overhead_s=scenario.router_overhead_s,
+        conservative_router_overhead_s=max(
+            scenario.router_overhead_s,
+            args.conservative_router_overhead_ms / 1_000,
+        ),
+        minimum_macro_quality_retention=args.minimum_macro_quality_retention,
+        maximum_quality_loss_rate_ucl=args.maximum_quality_loss_rate_ucl,
+        minimum_routed_safety_precision_lcb=(
+            args.minimum_routed_safety_precision_lcb
+        ),
+        minimum_guarded_dataset_quality_retention_lcb=(
+            args.minimum_guarded_dataset_quality_retention_lcb
+        ),
+        minimum_guarded_dataset_prompts=args.minimum_guarded_dataset_prompts,
         seed=args.seed,
         routing_probabilities=probabilities,
         router_name=router_name,
+        decision_metadata=(
+            {
+                "router_input_tokens": training.router_input_lengths,
+                "router_was_truncated": training.router_was_truncated,
+            }
+            if training is not None
+            else None
+        ),
     )
     output_dir = export_public_benchmark(result, scenario, Path(args.output_dir))
     if training is not None:
@@ -148,6 +200,21 @@ def main(argv: list[str] | None = None) -> int:
             poc_passed=result.poc_passed,
             failure_reasons=result.failure_reasons,
             validation_quality_margin=args.validation_quality_margin,
+            minimum_macro_quality_retention=args.minimum_macro_quality_retention,
+            maximum_quality_loss_rate_ucl=args.maximum_quality_loss_rate_ucl,
+            minimum_routed_safety_precision_lcb=(
+                args.minimum_routed_safety_precision_lcb
+            ),
+            minimum_guarded_dataset_quality_retention_lcb=(
+                args.minimum_guarded_dataset_quality_retention_lcb
+            ),
+            minimum_guarded_dataset_prompts=(
+                args.minimum_guarded_dataset_prompts
+            ),
+            conservative_router_overhead_s=max(
+                scenario.router_overhead_s,
+                args.conservative_router_overhead_ms / 1_000,
+            ),
             config=router_config,
         )
     print(result.summary.to_string())

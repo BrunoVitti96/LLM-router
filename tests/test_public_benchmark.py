@@ -177,7 +177,7 @@ def test_export_records_explicit_poc_status_and_candidate_diagnostics(tmp_path):
     assert (output / "candidate_diagnostics.csv").is_file()
     assert (output / "per_dataset_metrics.csv").is_file()
     assert (output / "test_router_overhead_sensitivity.csv").is_file()
-    assert manifest["schema_version"] == 3
+    assert manifest["schema_version"] == 4
 
 
 def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
@@ -207,7 +207,11 @@ def test_public_experiment_reports_headroom_and_fails_closed(tmp_path):
     assert {
         "quality_loss_rate_ucl",
         "routed_safety_precision",
+        "routed_safety_precision_lcb",
+        "safe_opportunity_recall",
         "macro_dataset_quality_retention",
+        "guarded_dataset_quality_retention_lcb",
+        "conservative_resource_savings",
     }.issubset(result.summary.columns)
     assert not result.per_dataset_metrics.empty
     assert not result.router_overhead_sensitivity.empty
@@ -263,3 +267,50 @@ def test_safety_probabilities_drive_hybrid_policy_without_timing_inference(tmp_p
     )
     assert result.router_name == "modernbert_hybrid_router"
     assert "modernbert_hybrid_router" in result.summary.index
+    assert {
+        "safety_probability__fast",
+        "safety_probability__specialist",
+        "safety_probability__strong",
+    }.issubset(result.decisions.columns)
+
+
+def test_strict_policy_gates_and_decision_metadata_are_enforced(tmp_path):
+    records = load_llmrouterbench(synthetic_release(tmp_path), models=MODELS)
+    panel = make_complete_panel(simulate_economics(records, scenario()), MODELS)
+    split = split_benchmark(panel, mode="random", seed=42)
+    metadata = np.arange(len(panel.examples))
+
+    result = run_public_benchmark(
+        panel,
+        split,
+        objective="latency",
+        minimum_quality_retention=0.5,
+        confidence=0.8,
+        router_overhead_s=scenario().router_overhead_s,
+        conservative_router_overhead_s=0.02,
+        minimum_macro_quality_retention=0.5,
+        maximum_quality_loss_rate_ucl=0.5,
+        minimum_routed_safety_precision_lcb=0.5,
+        minimum_guarded_dataset_quality_retention_lcb=0.5,
+        minimum_guarded_dataset_prompts=2,
+        decision_metadata={"router_input_tokens": metadata},
+    )
+
+    assert result.router_active
+    assert result.summary.loc[
+        "tfidf_safety_router", "conservative_resource_savings"
+    ] > 0
+    assert result.decisions.router_input_tokens.isin(metadata).all()
+    assert result.minimum_macro_quality_retention == 0.5
+
+    blocked = run_public_benchmark(
+        panel,
+        split,
+        objective="latency",
+        minimum_quality_retention=0.5,
+        confidence=0.8,
+        router_overhead_s=scenario().router_overhead_s,
+        conservative_router_overhead_s=10.0,
+    )
+    assert not blocked.router_active
+    assert not blocked.poc_passed
