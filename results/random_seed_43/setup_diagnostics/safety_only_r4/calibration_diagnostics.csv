@@ -1,0 +1,2 @@
+candidate,validation_examples,safe_prevalence,constant_brier,raw_brier,calibrated_brier,raw_brier_skill,calibrated_brier_skill,raw_ece,calibrated_ece,safe_roc_auc,safe_average_precision,unsafe_average_precision
+Fin-R1,2798,0.7655468191565404,0.1794848868358436,0.20598102485117564,0.15028014821957342,-0.1476232260132595,0.16271419355202177,0.21125587017366593,0.023385414349086996,0.7286813099223429,0.8759917098850031,0.5060180442724315

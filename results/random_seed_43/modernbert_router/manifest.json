@@ -1,0 +1,134 @@
+{
+  "schema_version": 5,
+  "router": "ModernBERT hybrid safety router",
+  "deployed_prediction": "fallback-relative replacement safety",
+  "oracle_role": "training-only auxiliary loss",
+  "encoder_repo": "nomic-ai/modernbert-embed-base",
+  "encoder_revision": "d556a88e332558790b210f7bdbe87da2fa94a8d8",
+  "router_max_input_tokens": 512,
+  "model_names": [
+    "Fin-R1",
+    "Qwen3-8B"
+  ],
+  "fallback_model": "Qwen3-8B",
+  "nonfallback_models": [
+    "Fin-R1"
+  ],
+  "input_features": "prompt text and prompt-token count; no dataset identifier",
+  "safety_definition": "candidate_quality >= fallback_quality - epsilon",
+  "loss": {
+    "safety_bce_weight": 1.0,
+    "safety_positive_weights": {
+      "Fin-R1": 0.3728786110877991
+    },
+    "oracle_auxiliary_weight": 0.25
+  },
+  "selected_setup": "hybrid_r4_dataset_balanced",
+  "selected_safety_threshold": 1.1,
+  "calibration": {
+    "method": "per-candidate Platt scaling",
+    "validation_probabilities": "out-of-fold",
+    "deployment_parameters": {
+      "Fin-R1": {
+        "slope": 0.6652140021324158,
+        "intercept": 1.0500236749649048
+      }
+    }
+  },
+  "minimum_predicted_savings": 0.02,
+  "validation_quality_margin": 0.01,
+  "policy_gates": {
+    "minimum_macro_quality_retention": 0.98,
+    "maximum_quality_loss_rate_ucl": 0.025,
+    "minimum_routed_safety_precision_lcb": 0.9,
+    "minimum_guarded_dataset_quality_retention_lcb": 0.9,
+    "minimum_guarded_dataset_prompts": 100,
+    "conservative_router_overhead_s": 0.02,
+    "minimum_consecutive_feasible_thresholds": 2
+  },
+  "validation_router_active": false,
+  "single_run_passed": false,
+  "study_status": "single_run_failed",
+  "poc_passed": false,
+  "failure_reasons": [
+    "No validation threshold met every configured aggregate, subgroup, harm, routed-precision, and conservative-overhead gate.",
+    "Sealed-test net analytical savings were not positive.",
+    "Sealed-test analytical savings were not positive under the conservative router-overhead assumption.",
+    "The sealed-test policy routed every prompt to fallback."
+  ],
+  "router_active": false,
+  "deployment_enabled": false,
+  "latency_source": "analytical_model_profile_and_prompt_tokens",
+  "candidate_inference_used_for_latency": false,
+  "router_overhead_benchmark": {
+    "schema_version": 1,
+    "measured_component": "ModernBERT tokenization, host-to-device transfer, and router inference",
+    "candidate_latency_method": "analytical; candidate LLMs were not loaded",
+    "measurement_affects_frozen_policy": false,
+    "batch_size": 1,
+    "timed_requests": 100,
+    "warmup_requests": 10,
+    "max_input_tokens": 512,
+    "device": "cuda",
+    "gpu": "Tesla T4",
+    "torch_version": "2.11.0+cu128",
+    "cuda_runtime": "12.8",
+    "platform": "Linux-6.6.122+-x86_64-with-glibc2.35",
+    "end_to_end_ms": {
+      "mean": 50.4318652099937,
+      "p50": 47.153150500435004,
+      "p95": 66.2684684992655,
+      "maximum": 81.44068399997195
+    },
+    "model_only_ms": {
+      "mean": 49.81805574005193,
+      "p50": 46.30473550014358,
+      "p95": 68.29312224931527,
+      "maximum": 76.96969300013734
+    }
+  },
+  "optimization": {
+    "encoder_learning_rate": 0.0001,
+    "head_learning_rate": 0.0002,
+    "minimum_epochs": 2,
+    "early_stopping_patience": 2,
+    "best_epoch": 1,
+    "epochs_completed": 3,
+    "stopped_early": true,
+    "dataset_balanced_sampling": true
+  },
+  "input_diagnostics": {
+    "examples": 14041,
+    "max_input_tokens": 512,
+    "truncated_examples": 474,
+    "truncation_rate": 0.03375827932483441,
+    "router_tokens_p50": 85.0,
+    "router_tokens_p95": 463.0,
+    "router_tokens_max": 1408
+  },
+  "training_seconds": 1157.260064871,
+  "benchmark_fingerprint_sha256": "a2d0df2db1914e3a0813f34c807a1f568408633fd3d6e00b7be8fc59023caa37",
+  "reproducibility": {
+    "repository_commit": "8f5e3c82175d4153da07e8c5e39ad1508b0e93db",
+    "python": "3.12.13 (main, Mar  4 2026, 09:23:07) [GCC 11.4.0]",
+    "platform": "Linux-6.6.122+-x86_64-with-glibc2.35",
+    "packages": {
+      "accelerate": "1.14.0",
+      "huggingface-hub": "0.36.2",
+      "numpy": "2.0.2",
+      "pandas": "2.2.3",
+      "peft": "0.17.1",
+      "scikit-learn": "1.6.1",
+      "torch": "2.11.0+cu128",
+      "transformers": "4.53.1"
+    },
+    "gpu": {
+      "name": "Tesla T4",
+      "capability": [
+        7,
+        5
+      ],
+      "cuda_runtime": "12.8"
+    }
+  }
+}

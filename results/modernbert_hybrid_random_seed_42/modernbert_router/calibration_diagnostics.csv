@@ -1,2 +1,0 @@
-candidate,validation_examples,safe_prevalence,raw_brier,calibrated_brier,raw_ece,calibrated_ece
-Fin-R1,2804,0.7578459343794579,0.17706687961200387,0.15090400707412205,0.12877255943889457,0.017545192137084248
