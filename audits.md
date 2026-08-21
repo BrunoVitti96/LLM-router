@@ -43,21 +43,30 @@ and exposed only one replacement-safety head. LLMRouterBench's public lightweigh
 pool contains roughly 7B–9B candidates, so it cannot supply honest 1B/3B/8B
 quality outcomes.
 
-Notebook 03 now collects a separate pinned panel from official Qwen2.5-1.5B,
-Qwen2.5-3B, and Qwen2.5-7B checkpoints. Their official sizes are 1.54B, 3.09B,
-and 7.61B. The first run samples 150 prompts from each of six datasets and caches
-$900\times3=2{,}700$ deterministic NF4 4-bit outcomes in Google Drive. Model and
-dataset revisions, prompt template, sampling seed, and generation settings are
-hashed into an evidence tag. Candidate generation constructs quality labels only;
-candidate latency remains analytical.
+Notebook 03 now loads pinned per-example detail datasets for official
+Qwen2.5-1.5B, Qwen2.5-3B, and Qwen2.5-7B evaluations. Their official sizes are
+1.54B, 3.09B, and 7.61B. The three Open LLM Leaderboard repositories expose the
+same 39 task files. V3 excludes overlapping GPQA main and extended variants and
+keeps at most 300 aligned prompts from each of the remaining 37 tasks: at most
+$11{,}100\times3=33{,}300$ published outcomes. Dataset revisions, evaluation run
+IDs, exclusions, cap, and sampling seed are hashed into an evidence tag.
+
+The detail repositories are auto-gated and require an accepted Hugging Face read
+token. No Qwen weights are loaded and no candidate answers are generated. A
+pinned Qwen tokenizer is downloaded only for token counts. Candidate latency
+remains analytical under a BF16 scenario; using 4-bit latency would require
+matching per-example quantized quality evidence. The temporary
+`qwen-evaluation` dependency extra was removed because `bitsandbytes` and
+`datasets` are no longer needed for candidate generation; the normal notebook
+dependencies already include Hugging Face Hub and Transformers.
 
 The v3 router compares rank-4 hybrid, rank-4 safety-only, and rank-8 hybrid
 setups on validation. It keeps the schema-v5 calibration, threshold stability,
 aggregate, macro, harm, routed-precision, guarded-dataset, and overhead gates.
 It exports the scored candidate panel and evidence contract with every run.
 
-The 900-prompt panel is explicitly a pilot. It must not be presented as a passed
-router until the notebook is executed and `single_run_passed=True`; even then,
+The capped published panel must not be presented as a passed router until the
+notebook is executed and `single_run_passed=True`; even then,
 all random seeds, dataset-OOD runs, and a larger evidence panel remain required
 for an investment-grade claim.
 

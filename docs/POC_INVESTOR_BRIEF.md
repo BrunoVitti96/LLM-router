@@ -40,9 +40,12 @@ Qwen2.5 capacity tiers: 1.54B, 3.09B, and 7.61B. The small tier is only
 $1.54/7.61=20.2\%$ of the strong tier's parameter count, creating materially
 more analytical room for router overhead.
 
-V3 collects 900 prompts across six public tasks and three candidates, producing
-2,700 scored quality outcomes. Model and dataset revisions, sampling, prompt
-template, deterministic generation, and 4-bit quantization are fingerprinted.
+V3 downloads pinned Open LLM Leaderboard per-example details for all three tiers;
+it never loads Qwen weights. After removing two overlapping GPQA variants, it
+keeps at most 300 aligned prompts from each of 37 tasks—at most 11,100 prompts
+and 33,300 recorded prompt-model outcomes. Evidence repository revisions,
+evaluation run IDs, task exclusions, and sampling are fingerprinted. Candidate
+latency remains an analytical BF16 scenario.
 The router still uses validation-only setup and threshold selection, per-candidate
 Platt calibration, duplicate-content grouping, subgroup and harm gates, two
 adjacent feasible thresholds, and exactly one sealed-test opening per run.
@@ -72,9 +75,9 @@ already saves a guaranteed percentage or dollar amount would exceed the evidence
 
 ## Fundable next step
 
-Funding should buy validation rather than optimism: complete the v3 evidence
-cache, publish all six run artifacts, measure ModernBERT p50/p95 on target
-hardware, expand beyond the 900-prompt pilot, and run a paid design partnership
+Funding should buy validation rather than optimism: ingest and audit the v3
+published evidence, publish all six run artifacts, measure ModernBERT p50/p95 on
+target hardware, expand beyond the capped public panel, and run a paid design partnership
 with aggregate quality audits. The milestone has three acceptable outcomes:
 general router, domain-specific router, or a negative result that safely stays
 on fallback.

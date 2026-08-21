@@ -14,8 +14,8 @@ weak generalization result is reported rather than optimized away.
 Run `qwen25_random_seed_42`, `qwen25_random_seed_43`, and
 `qwen25_random_seed_44` with the same three
 setups, loss, calibration, threshold grid, and schema-v5 gates. Publish every
-artifact and a cross-seed table. The shared 2,700-row candidate evidence must
-keep one fingerprint across all seeds. Do not change the seed-42 test after
+artifact and a cross-seed table. The shared sampled Open LLM Leaderboard evidence
+must keep one fingerprint across all seeds. Do not change the seed-42 test after
 observing it. Exit evidence includes activation rate, quality-retention LCB, routed safety
 precision LCB, harm UCL, macro and guarded retention, conservative savings, and
 feasible threshold-block size for all three seeds.
@@ -46,7 +46,8 @@ claim that the 14 ms median applies to every request.
 
 ### Milestone 4 — Stronger candidate economics
 
-Evaluate the pinned Qwen2.5 1.54B/3.09B/7.61B panel. Require every retained tier
+Evaluate the pinned, published Qwen2.5 1.54B/3.09B/7.61B detail datasets without
+rerunning the candidates. Require every retained tier
 to be selected by the outcome oracle on a non-zero fraction of prompts. The
 parameter ratios are 20.2% and 40.6% for the small and middle tiers relative to
 7.61B, compared with 85.4% for the historical 7.0B/8.2B pair. If a tier has zero

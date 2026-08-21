@@ -98,12 +98,14 @@ def test_qwen_tier_v3_notebook_is_clean_didactic_and_syntactically_valid():
         "3.09B",
         "7.61B",
         "EVIDENCE_TAG",
-        "DATASET_REVISIONS",
+        "evidence_revision",
+        "evaluation_run",
         "qwen25_random_seed_42",
         "qwen25_dataset_ood_seed_42",
-        "Google Drive",
-        "2,700",
-        "NF4 4-bit",
+        "Open LLM Leaderboard",
+        "HF_TOKEN",
+        "33,300",
+        "No Qwen model weights",
         "Leakage check",
         "hindsight oracle",
         "replacement-safety",
@@ -120,6 +122,7 @@ def test_qwen_tier_v3_notebook_is_clean_didactic_and_syntactically_valid():
         'candidate_latency="analytical-only"',
         "qwen_candidate_records.parquet",
         "qwen_evidence_contract.json",
+        "published_evaluation_metadata.json",
         "create_gradio_demo",
         "files.download",
         "Final interpretation checklist",
@@ -127,6 +130,9 @@ def test_qwen_tier_v3_notebook_is_clean_didactic_and_syntactically_valid():
     assert all(lesson in full_text for lesson in required_lessons)
     assert full_text.count("run_public_benchmark(") == 1
     assert full_text.count("%pip install") == 1
+    assert "AutoModelForCausalLM" not in full_text
+    assert "BitsAndBytesConfig" not in full_text
+    assert ".generate(" not in full_text
 
     for cell in code_cells:
         source = "".join(cell["source"])

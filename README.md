@@ -1,7 +1,8 @@
 # Calibrated ModernBERT router for three Qwen capacity tiers
 
-The recommended v3 proof of concept first collects a reproducible, cached quality
-panel from three separated Qwen2.5 tiers—1.54B, 3.09B, and 7.61B parameters—then
+The recommended v3 proof of concept loads reproducible, published per-example
+quality evidence for three separated Qwen2.5 tiers—1.54B, 3.09B, and 7.61B
+parameters—then
 trains
 [`nomic-ai/modernbert-embed-base`](https://huggingface.co/nomic-ai/modernbert-embed-base)
 with lightweight LoRA adapters to estimate whether a faster candidate can
@@ -13,9 +14,9 @@ predicted safe.
 ModernBERT does **not** predict latency and does **not** directly predict the
 final model. Candidate latency comes from model size, generation architecture,
 precision, prompt size, and explicit hardware assumptions. No candidate LLM is
-timed to construct latency labels. In v3 the Qwen candidates are loaded one at a
-time only during offline quality-evidence collection; their observed generation
-time is neither recorded as a routing target nor used by the selector.
+loaded or timed in v3. Quality comes from pinned Hugging Face Open LLM
+Leaderboard detail datasets; published runtime is neither a routing target nor
+used by the selector.
 
 The project is an analytical-latency feasibility experiment, not a claim about
 measured production latency.
@@ -40,8 +41,9 @@ conservative quality, subgroup, harm, calibration, threshold-stability, and
 latency-overhead gates all pass.
 
 The v3 notebook freezes a six-run router plan: random and dataset-OOD modes at
-seeds 42, 43, and 44. Its 900-prompt quality panel is collected once and cached
-in Google Drive as 2,700 prompt-model outcomes, then reused across split seeds.
+seeds 42, 43, and 44. It deterministically keeps at most 300 aligned prompts from
+each of 37 non-overlapping published tasks: at most 11,100 prompts and 33,300
+prompt-model outcomes, reused across split seeds.
 One Colab session executes one named router run and exports one ZIP. ModernBERT
 batch-one overhead is measured on the active Colab GPU. Candidate generation is
 not timed for routing, so candidate latency remains analytical. The router timing
@@ -372,9 +374,9 @@ completion length by 100× and asserts that analytical latency is unchanged.
 
 ### What is measured and what remains analytical
 
-Candidate latency remains measurement-free throughout the POC. V3 loads the
-three Qwen candidates sequentially to collect answer-quality outcomes, but it
-does not treat collection runtime as candidate latency evidence. After validation
+Candidate latency remains measurement-free throughout the POC. V3 downloads
+published Qwen prompts, responses, and correctness metrics but never loads the
+Qwen weights. After validation
 freezes the setup and threshold, the notebook measures only the ModernBERT
 decision path on up to 100 deterministically sampled validation prompts after 10
 warmup requests. It exports model-only and end-to-end batch-one distributions;
@@ -392,20 +394,30 @@ test result.
 
 LLMRouterBench's public lightweight pool contains only roughly 7B–9B models, so
 it cannot honestly answer the requested small/middle/strong comparison. V3
-therefore collects a pinned 2,700-row quality panel from the closest official
-Qwen2.5 instruction-tuned tiers:
+therefore aligns pinned Open LLM Leaderboard detail datasets for the closest
+official Qwen2.5 instruction-tuned tiers:
 
-| Candidate | Role | Official facts | V3 offline precision |
-|---|---|---|---:|
-| `Qwen2.5-1.5B` | small replacement | 1.54B, autoregressive | NF4 4-bit |
-| `Qwen2.5-3B` | middle replacement | 3.09B, autoregressive | NF4 4-bit |
-| `Qwen2.5-7B` | potential strong fallback | 7.61B, autoregressive | NF4 4-bit |
+| Candidate | Role | Official facts | V3 quality source |
+|---|---|---|---|
+| `Qwen2.5-1.5B` | small replacement | 1.54B, autoregressive | published per-example details |
+| `Qwen2.5-3B` | middle replacement | 3.09B, autoregressive | published per-example details |
+| `Qwen2.5-7B` | potential strong fallback | 7.61B, autoregressive | published per-example details |
 
 The pinned official model cards are
 [`Qwen/Qwen2.5-1.5B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct),
 [`Qwen/Qwen2.5-3B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct),
 and
 [`Qwen/Qwen2.5-7B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct).
+The corresponding per-example evidence is pinned from
+[`1.5B details`](https://huggingface.co/datasets/open-llm-leaderboard/Qwen__Qwen2.5-1.5B-Instruct-details),
+[`3B details`](https://huggingface.co/datasets/open-llm-leaderboard/Qwen__Qwen2.5-3B-Instruct-details),
+and
+[`7B details`](https://huggingface.co/datasets/open-llm-leaderboard/Qwen__Qwen2.5-7B-Instruct-details).
+These repositories are auto-gated and require an accepted Hugging Face account
+plus read token; accepting access is not the same as running the models.
+The v3 analytical serving scenario uses BF16. Claiming 4-bit serving savings
+would require per-example quality evidence from those quantized checkpoints; the
+notebook does not assume quantization preserves every answer.
 The fallback is still selected from training quality rather than forced by size;
 if 7B is not strongest on the training evidence, the notebook reports that
 instead of assuming parameter count guarantees quality.
@@ -453,8 +465,8 @@ The immutable run IDs are:
 Only `RUN_ID` changes between Colab sessions. The loss, three setup ablations,
 candidate facts, threshold grid, confidence gates, and analytical scenario remain
 fixed, including the v3 scenario identity date `2026-08-21`. The candidate quality
-evidence tag also freezes model and dataset revisions, prompt template, sampling,
-quantization, and deterministic generation settings. See the
+evidence tag also freezes detail-repository revisions, published evaluation run
+IDs, task exclusions, the per-task cap, and deterministic sampling seed. See the
 [`Colab runbook`](docs/COLAB_RUNBOOK.md).
 
 ## Train entirely in Google Colab
@@ -463,10 +475,11 @@ quantization, and deterministic generation settings. See the
 
 1. Select **Runtime → Change runtime type → GPU**.
 2. Leave `RUN_ID = "qwen25_random_seed_42"` for the first run and execute every
-   cell from top to bottom. Authorize Google Drive so the 2,700 candidate
-   outcomes survive a Colab disconnect.
-3. The first execution collects three pinned Qwen outcome panels one model at a
-   time. Later seeds reuse the evidence cache and train only the router.
+   cell from top to bottom. Accept access to the three auto-gated Open LLM
+   Leaderboard detail datasets and add a read token named `HF_TOKEN` to Colab
+   secrets.
+3. The notebook downloads pinned JSONL answer evidence and one Qwen tokenizer for
+   token counting. It never downloads or runs Qwen model weights.
 4. Let all three router setups finish, then inspect the validation-only setup
    comparison, threshold frontier, and measured
    ModernBERT p50/p95 versus break-even overhead.
@@ -476,9 +489,9 @@ quantization, and deterministic generation settings. See the
 7. Repeat random seeds 43 and 44. Run the three `qwen25_dataset_ood_seed_*`
    artifacts separately only after random feasibility is understood.
 
-The notebook downloads six pinned public evaluation datasets, samples 150 rows
-from each, collects deterministic 4-bit outcomes from the three pinned Qwen2.5
-checkpoints, proves completion-length leakage is absent, audits prompt-content
+The notebook downloads three pinned Open LLM Leaderboard detail repositories,
+aligns their 37 non-overlapping task files, deterministically keeps at most 300
+prompts per task, proves completion-length leakage is absent, audits prompt-content
 groups, runs validation-only sensitivity scenarios, trains and calibrates
 ModernBERT with epoch-level logs and early stopping, and compares the declared
 setups on validation. It freezes one setup with a validation safety margin and
@@ -506,7 +519,8 @@ not a router-training failure.
 
 The report directory contains:
 
-- `qwen_candidate_records.parquet`: all 2,700 scored, pinned candidate outcomes;
+- `qwen_candidate_records.parquet`: sampled, aligned, published candidate outcomes;
+- `published_evaluation_metadata.json`: the complete pinned leaderboard run metadata;
 - `qwen_candidate_panel_summary.csv`: quality and analytical latency by tier;
 - `qwen_evidence_contract.json`: evidence tag, model and dataset revisions,
   prompt template, sampling, quantization, and generation policy;
@@ -560,8 +574,8 @@ repository commit, Python and package versions, GPU, and CUDA runtime.
 ## Historical LLMRouterBench command-line equivalents
 
 The CLI commands below reproduce notebook 02's public-benchmark line of work.
-Notebook 03 is the canonical three-tier Qwen workflow because its pinned quality
-collection step is intentionally explicit in the notebook.
+Notebook 03 is the canonical three-tier Qwen workflow because its pinned
+published-evidence ingestion step is intentionally explicit in the notebook.
 
 Feasibility:
 
