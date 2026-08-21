@@ -11,10 +11,12 @@ weak generalization result is reported rather than optimized away.
 
 ### Milestone 1 — Reproducible random-split feasibility
 
-Run `random_seed_42`, `random_seed_43`, and `random_seed_44` with the same three
+Run `qwen25_random_seed_42`, `qwen25_random_seed_43`, and
+`qwen25_random_seed_44` with the same three
 setups, loss, calibration, threshold grid, and schema-v5 gates. Publish every
-artifact and a cross-seed table. Do not change the seed-42 test after observing
-it. Exit evidence includes activation rate, quality-retention LCB, routed safety
+artifact and a cross-seed table. The shared 2,700-row candidate evidence must
+keep one fingerprint across all seeds. Do not change the seed-42 test after
+observing it. Exit evidence includes activation rate, quality-retention LCB, routed safety
 precision LCB, harm UCL, macro and guarded retention, conservative savings, and
 feasible threshold-block size for all three seeds.
 
@@ -23,8 +25,9 @@ but unstable,” not an average 8% routing claim.
 
 ### Milestone 2 — Dataset-OOD stress test
 
-Run `dataset_ood_seed_42`, `dataset_ood_seed_43`, and `dataset_ood_seed_44` as
-separate artifacts. Entire datasets must remain disjoint. If the router fails
+Run `qwen25_dataset_ood_seed_42`, `qwen25_dataset_ood_seed_43`, and
+`qwen25_dataset_ood_seed_44` as separate artifacts. Entire datasets must remain
+disjoint. If the router fails
 closed on OOD while random splits pass, reposition the product as a domain-tuned
 router and test customer-specific adaptation rather than claiming universal
 generalization.
@@ -43,11 +46,12 @@ claim that the 14 ms median applies to every request.
 
 ### Milestone 4 — Stronger candidate economics
 
-Add candidates only when pre-collected quality outcomes and sourced analytical
-model facts are available. Require a non-dominated panel: every retained model
-must be selected by the outcome oracle on a non-zero fraction of prompts. Favor
-meaningful latency separation because a 7.0B versus 8.2B panel leaves limited
-room after router overhead.
+Evaluate the pinned Qwen2.5 1.54B/3.09B/7.61B panel. Require every retained tier
+to be selected by the outcome oracle on a non-zero fraction of prompts. The
+parameter ratios are 20.2% and 40.6% for the small and middle tiers relative to
+7.61B, compared with 85.4% for the historical 7.0B/8.2B pair. If a tier has zero
+oracle usage or is no better than a faster tier, remove it before a production
+panel is frozen.
 
 ### Milestone 5 — Design-partner pilot
 

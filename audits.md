@@ -8,6 +8,59 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-08-21 — Seed-44 failure and three-tier Qwen v3
+
+### What the completed seed-44 run showed
+
+The executed notebook-02 random seed-44 run trained all three schema-v5 setups.
+Validation selected rank-4 hybrid training at threshold `0.895`; it had a
+contiguous feasible block of two thresholds. The sealed test contained 2,805
+prompts. The router sent 623 prompts (22.21%) to Fin-R1, gained 43 correct
+answers, lost 52, and ended nine answers behind Qwen3-8B.
+
+The point-estimate quality retention was 99.55% and its one-sided 95% lower bound
+was 98.73%. The harm-rate upper bound was 2.32%, within the 2.5% gate. However,
+routed-safety precision was 91.65% with an 89.65% lower bound, below the 90%
+gate. The guarded worst-dataset retention lower bound was 88.36%, also below its
+90% floor, and macro-dataset retention missed its gate. Therefore the explicit
+result was `single_run_passed=False`.
+
+Task mix was materially unsafe. MBPP contributed +17 net answers and HumanEval
++7, while FinQA contributed -9, MMLU-Pro -7, WinoGrande -5, KORBench -5, and
+ARC-Challenge -4. Numerically, $43-52=-9$. The positive code gains did not cancel
+the knowledge and reasoning losses under the predeclared subgroup policy.
+
+Analytical latency savings were 2.52% at 4 ms overhead and 1.68% at 20 ms. The
+policy break-even overhead was 52.14 ms. Measured end-to-end ModernBERT overhead
+was 42.55 ms at p50 and 67.23 ms at p95, so median economics were positive while
+tail economics were negative.
+
+### Why notebook v3 changed the candidate evidence
+
+The historical panel compared 7.0B and 8.2B models, a parameter ratio of
+$7.0/8.2=85.4\%$. That narrow separation limited savings after router overhead
+and exposed only one replacement-safety head. LLMRouterBench's public lightweight
+pool contains roughly 7B–9B candidates, so it cannot supply honest 1B/3B/8B
+quality outcomes.
+
+Notebook 03 now collects a separate pinned panel from official Qwen2.5-1.5B,
+Qwen2.5-3B, and Qwen2.5-7B checkpoints. Their official sizes are 1.54B, 3.09B,
+and 7.61B. The first run samples 150 prompts from each of six datasets and caches
+$900\times3=2{,}700$ deterministic NF4 4-bit outcomes in Google Drive. Model and
+dataset revisions, prompt template, sampling seed, and generation settings are
+hashed into an evidence tag. Candidate generation constructs quality labels only;
+candidate latency remains analytical.
+
+The v3 router compares rank-4 hybrid, rank-4 safety-only, and rank-8 hybrid
+setups on validation. It keeps the schema-v5 calibration, threshold stability,
+aggregate, macro, harm, routed-precision, guarded-dataset, and overhead gates.
+It exports the scored candidate panel and evidence contract with every run.
+
+The 900-prompt panel is explicitly a pilot. It must not be presented as a passed
+router until the notebook is executed and `single_run_passed=True`; even then,
+all random seeds, dataset-OOD runs, and a larger evidence panel remain required
+for an investment-grade claim.
+
 ## 2026-08-19 — Multi-seed Colab plan, router-only timing, and demo
 
 The seed-42 schema-v5 run was judged sufficient for a technical feasibility POC

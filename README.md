@@ -1,17 +1,21 @@
-# Calibrated ModernBERT latency-aware LLM router
+# Calibrated ModernBERT router for three Qwen capacity tiers
 
-This proof of concept trains
+The recommended v3 proof of concept first collects a reproducible, cached quality
+panel from three separated Qwen2.5 tiers—1.54B, 3.09B, and 7.61B parameters—then
+trains
 [`nomic-ai/modernbert-embed-base`](https://huggingface.co/nomic-ai/modernbert-embed-base)
 with lightweight LoRA adapters to estimate whether a faster candidate can
 preserve the quality of a strong fallback for each prompt. The notebook compares
-loss and dataset-sampling setups, with an optional rank-8 capacity ablation,
+loss and adapter-capacity setups, including a rank-8 capacity ablation,
 before a deterministic analytical estimator selects the lowest-latency candidate
 predicted safe.
 
 ModernBERT does **not** predict latency and does **not** directly predict the
 final model. Candidate latency comes from model size, generation architecture,
 precision, prompt size, and explicit hardware assumptions. No candidate LLM is
-loaded or timed to construct latency labels.
+timed to construct latency labels. In v3 the Qwen candidates are loaded one at a
+time only during offline quality-evidence collection; their observed generation
+time is neither recorded as a routing target nor used by the selector.
 
 The project is an analytical-latency feasibility experiment, not a claim about
 measured production latency.
@@ -26,20 +30,22 @@ without doing worse than the trusted fallback?" If its calibrated confidence is
 high enough and the analytical latency model predicts at least a 2% speedup, it
 uses the fastest eligible alternative. Otherwise it safely uses the fallback.
 
-Technically, ModernBERT predicts a separate fallback-relative safety probability
-for every non-fallback candidate. The selector combines those probabilities with
-analytical latency estimates. The notebook compares three training setups using
-validation outcomes only, freezes one setup and one stable threshold region, and
-then opens the sealed test exactly once. The test is successful only if
+Technically, ModernBERT predicts two separate fallback-relative safety
+probabilities, one for each non-fallback Qwen tier. The selector combines those
+probabilities with analytical latency estimates. The notebook compares three
+training setups using validation outcomes only, freezes one setup and one stable
+threshold region, and then opens the sealed test exactly once. The test is
+successful only if
 conservative quality, subgroup, harm, calibration, threshold-stability, and
 latency-overhead gates all pass.
 
-The repository now freezes a six-run evidence plan: random and dataset-OOD modes
-at seeds 42, 43, and 44. One Colab session executes one named run and exports one
-ZIP. ModernBERT batch-one overhead is measured on the active Colab GPU, but the
-candidate LLMs are never loaded or timed. Their latency remains analytical. The
-measurement is diagnostic and cannot retroactively change the frozen 4 ms and
-20 ms policy gates.
+The v3 notebook freezes a six-run router plan: random and dataset-OOD modes at
+seeds 42, 43, and 44. Its 900-prompt quality panel is collected once and cached
+in Google Drive as 2,700 prompt-model outcomes, then reused across split seeds.
+One Colab session executes one named router run and exports one ZIP. ModernBERT
+batch-one overhead is measured on the active Colab GPU. Candidate generation is
+not timed for routing, so candidate latency remains analytical. The router timing
+is diagnostic and cannot retroactively change the frozen 4 ms and 20 ms gates.
 
 For a simplified numerical example, suppose the fallback answers 80 of 100
 prompts correctly. A routed policy answers 79 correctly, so its point-estimate
@@ -49,12 +55,35 @@ test gate. If faster routing saves 50 ms per prompt before routing cost and the
 router costs 4 ms, net analytical savings are $50-4=46$ ms per prompt. The
 policy must satisfy both the quality and latency requirements.
 
-The default setup comparison asks two concrete questions. Comparing rank-4
-hybrid training against rank-4 safety-only training tests whether the
-training-only oracle helps. Comparing ordinary against dataset-balanced rank-4
-training tests whether large datasets dominate performance. An optional rank-8
-setup tests adapter capacity. These are validation experiments; the test set is
-not used to pick the winner.
+The v3 setup comparison asks two concrete questions. Comparing rank-4 hybrid
+training against rank-4 safety-only training tests whether the training-only
+oracle helps. Comparing rank-4 against rank-8 hybrid training tests adapter
+capacity. These are validation experiments; the test set is not used to pick the
+winner. Notebook 02 retains the earlier dataset-balanced ablation.
+
+## Current evidence: notebook 02 seed 44 did not pass
+
+The latest completed run in
+[`02_train_modernbert_hybrid_poc.ipynb`](notebooks/02_train_modernbert_hybrid_poc.ipynb)
+used random seed 44 and the old Fin-R1/Qwen3-8B panel. It routed 623 of 2,805
+sealed-test prompts (22.21%), gained 43 correct answers, lost 52, and ended nine
+answers behind fallback. Its quality-retention point estimate was 99.55%, while
+the one-sided 95% lower bound was 98.73%, above the 98% aggregate gate.
+
+That aggregate result was not enough. Routed-safety precision was 91.65% with an
+89.65% lower bound, below the 90% gate. The guarded worst-dataset retention lower
+bound was 88.36%, below its 90% floor, and the macro-dataset quality lower bound
+also failed. FinQA lost nine net answers and MMLU-Pro lost seven, while MBPP gained
+17. Numerically, $43-52=-9$, so the run is a negative safety result even though
+analytical latency savings remained positive.
+
+ModernBERT end-to-end overhead was 42.55 ms at p50 and 67.23 ms at p95. The
+frozen policy's break-even overhead was 52.14 ms, so median economics remained
+positive but tail economics did not. At the frozen 4 ms and 20 ms assumptions,
+analytical savings were 2.52% and 1.68%. This is why v3 tests more separated
+candidate tiers: the old parameter ratio was $7.0/8.2=85.4\%$, leaving a narrow
+latency margin, while the new small tier is $1.54/7.61=20.2\%$ of the strong
+tier's parameter count.
 
 ## Routing logic
 
@@ -159,9 +188,10 @@ fallback's recorded quality. A separate training-only oracle teaches the shared
 representation which safe choice would have been fastest, but that oracle is
 never available when routing a new prompt.
 
-For example, if the fallback scores 1 and Fin-R1 scores 0, Fin-R1 receives an
-unsafe label of 0. If both score 1, it receives a safe label of 1. If both score
-0, it also receives a safe label under the default fallback-relative definition:
+For example, if the Qwen2.5-7B fallback scores 1 and Qwen2.5-1.5B scores 0, the
+1.5B tier receives an unsafe label of 0. If both score 1, it receives a safe
+label of 1. If both score 0, it also receives a safe label under the default
+fallback-relative definition:
 the replacement did not make the fallback's result worse, even though neither
 model answered correctly. This distinction is why the loss estimates safe
 replacement rather than absolute correctness.
@@ -203,11 +233,11 @@ $$
 \qquad p_m=\sigma(s_m).
 $$
 
-For example, suppose Fin-R1 is safe on 20 of 100 training prompts. Its positive
+For example, suppose Qwen2.5-1.5B is safe on 20 of 100 training prompts. Its positive
 weight is:
 
 $$
-w_{Fin}=\frac{80\text{ unsafe}}{20\text{ safe}}=4.
+w_{1.5B}=\frac{80\text{ unsafe}}{20\text{ safe}}=4.
 $$
 
 If a safe prompt receives predicted probability $p=0.8$, its unweighted BCE is
@@ -241,24 +271,25 @@ $r_m=\max((L_m-L_o)/L_f,0)$ is normalized latency regret. The factor 4 makes
 probability assigned to a quality-losing model more expensive than probability
 assigned to a merely slower model.
 
-For a numerical example, suppose Fin-R1 and the Qwen fallback both score 1 on a
-prompt, but their analytical latencies are 0.70 s and 1.00 s. Fin-R1 is the
-oracle and the available speedup is $g_o=(1.00-0.70)/1.00=0.30$. If the oracle
-head assigns probabilities `[0.8, 0.2]` to `[Fin-R1, Qwen]`, then:
+For a numerical example, suppose Qwen2.5-1.5B and the Qwen2.5-7B fallback both
+score 1 on a prompt, but their analytical latencies are 0.40 s and 1.00 s. The
+1.5B tier is the oracle and the available speedup is
+$g_o=(1.00-0.40)/1.00=0.60$. If the oracle head assigns probabilities
+`[0.8, 0.2]` to `[Qwen2.5-1.5B, Qwen2.5-7B]`, then:
 
 $$
 \begin{aligned}
-\text{oracle imitation} &=1.30[-\log(0.8)]=0.290,\\
+\text{oracle imitation} &=1.60[-\log(0.8)]=0.357,\\
 \text{quality risk} &=0,\\
-\text{latency regret} &=0.2\frac{1.00-0.70}{1.00}=0.060,\\
-\mathcal L_{oracle} &=0.290+0+0.060=0.350.
+\text{latency regret} &=0.2\frac{1.00-0.40}{1.00}=0.120,\\
+\mathcal L_{oracle} &=0.357+0+0.120=0.477.
 \end{aligned}
 $$
 
-If Fin-R1 instead scored 0 while Qwen scored 1, Fin-R1 would be unsafe and the
-oracle would choose Qwen despite its higher latency. Assigning probability to
-Fin-R1 would then incur the quality-risk penalty, illustrating that preserving
-quality takes priority over saving latency.
+If the 1.5B tier instead scored 0 while the 7B tier scored 1, the 1.5B tier would
+be unsafe and the oracle would choose 7B despite its higher latency. Assigning
+probability to 1.5B would then incur the quality-risk penalty, illustrating that
+preserving quality takes priority over saving latency.
 
 ### Complete training loss
 
@@ -273,7 +304,7 @@ Continuing the safe-prompt example and assuming its candidate class weight is
 $w_m=1$, the safety loss is $0.223$ and:
 
 $$
-\mathcal L_{train}=0.223+0.25(0.350)=0.3105\approx0.311.
+\mathcal L_{train}=0.223+0.25(0.477)=0.34225\approx0.342.
 $$
 
 The safety head is the deployed prediction. The oracle head only shapes the
@@ -284,18 +315,17 @@ the real objective: minimize latency subject to preserving fallback quality.
 The Colab notebook treats the oracle coefficient and LoRA rank as predeclared
 validation ablations:
 
-| Setup | LoRA rank | Oracle coefficient | Dataset-balanced | Question answered |
-|---|---:|---:|---:|---|
-| `hybrid_r4` | 4 | 0.25 | No | Current hybrid baseline |
-| `safety_only_r4` | 4 | 0.00 | No | Does the oracle auxiliary loss help? |
-| `hybrid_r4_dataset_balanced` | 4 | 0.25 | Yes | Do large datasets dominate training? |
-| `hybrid_r8` (optional) | 8 | 0.25 | No | Does additional adapter capacity help? |
+| Setup | LoRA rank | Oracle coefficient | Question answered |
+|---|---:|---:|---|
+| `hybrid_r4` | 4 | 0.25 | Current hybrid baseline |
+| `safety_only_r4` | 4 | 0.00 | Does the oracle auxiliary loss help? |
+| `hybrid_r8` | 8 | 0.25 | Does additional adapter capacity help? |
 
 All enabled setups use the same train/validation/test split. Their setup leaderboard,
 calibration diagnostics, threshold frontiers, and training curves use validation
 only. The selected setup alone is evaluated on sealed-test outcomes.
 
-Dataset-balanced sampling assigns every training row from dataset $d$ weight
+Notebook 02's historical dataset-balanced setup assigns every training row from dataset $d$ weight
 $1/N_d$ and samples with replacement. After normalization, each of $D$ datasets
 therefore supplies expected probability $1/D$ per optimizer draw. The BCE class
 weights are calculated from the same dataset-balanced weights so sampling and
@@ -342,12 +372,14 @@ completion length by 100× and asserts that analytical latency is unchanged.
 
 ### What is measured and what remains analytical
 
-Candidate latency remains measurement-free throughout the POC. Fin-R1 and
-Qwen3-8B are not loaded in Colab. After validation freezes the setup and
-threshold, the notebook measures only the ModernBERT decision path on 100
-deterministically sampled validation prompts after 10 warmup requests. It exports
-model-only and end-to-end batch-one distributions; end-to-end includes
-tokenization, host-to-device transfer, and ModernBERT inference.
+Candidate latency remains measurement-free throughout the POC. V3 loads the
+three Qwen candidates sequentially to collect answer-quality outcomes, but it
+does not treat collection runtime as candidate latency evidence. After validation
+freezes the setup and threshold, the notebook measures only the ModernBERT
+decision path on up to 100 deterministically sampled validation prompts after 10
+warmup requests. It exports model-only and end-to-end batch-one distributions;
+end-to-end includes tokenization, host-to-device transfer, and ModernBERT
+inference.
 
 For example, suppose a frozen policy's break-even router overhead is 26.9 ms.
 A measured ModernBERT p50 of 14 ms is below break-even, while a p95 of 31 ms is
@@ -356,21 +388,31 @@ latency needs batching, distillation, or a wider candidate latency gap. Neither
 measurement changes the analytical candidate estimates or the already-opened
 test result.
 
-## Default candidate panel
+## Default v3 candidate panel
 
-The clean default uses two benchmark candidates:
+LLMRouterBench's public lightweight pool contains only roughly 7B–9B models, so
+it cannot honestly answer the requested small/middle/strong comparison. V3
+therefore collects a pinned 2,700-row quality panel from the closest official
+Qwen2.5 instruction-tuned tiers:
 
-| Candidate | Role | Declared facts |
-|---|---|---|
-| `Fin-R1` | faster replacement | 7.0B, autoregressive, BF16 |
-| `Qwen3-8B` | potential fallback | 8.2B, autoregressive, BF16 |
+| Candidate | Role | Official facts | V3 offline precision |
+|---|---|---|---:|
+| `Qwen2.5-1.5B` | small replacement | 1.54B, autoregressive | NF4 4-bit |
+| `Qwen2.5-3B` | middle replacement | 3.09B, autoregressive | NF4 4-bit |
+| `Qwen2.5-7B` | potential strong fallback | 7.61B, autoregressive | NF4 4-bit |
 
-Qwen's official model card reports 8.2B parameters:
-[`Qwen/Qwen3-8B`](https://huggingface.co/Qwen/Qwen3-8B).
+The pinned official model cards are
+[`Qwen/Qwen2.5-1.5B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct),
+[`Qwen/Qwen2.5-3B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-3B-Instruct),
+and
+[`Qwen/Qwen2.5-7B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-7B-Instruct).
+The fallback is still selected from training quality rather than forced by size;
+if 7B is not strongest on the training evidence, the notebook reports that
+instead of assuming parameter count guarantees quality.
 
-The public benchmark pool contains no diffusion model. Do not relabel an
-autoregressive candidate as diffusion. Add a diffusion candidate only when its
-pre-collected quality results and sourced inference settings are available.
+The v3 panel contains no diffusion model. Do not relabel an autoregressive
+candidate as diffusion. Add a diffusion candidate only when comparable scored
+quality outcomes and sourced inference settings are available.
 
 ## Two experiments, two different claims
 
@@ -382,10 +424,10 @@ normalizing line endings and removing trailing whitespace. Case and leading
 indentation remain significant because changing them can alter code semantics.
 
 Thus, two source records with different IDs but the same normalized prompt must
-remain in one split. For example, `mmlupro::test_1000::17` and
-`mmlupro::test_3000::17` cannot enter train and test separately if their prompt
-content is identical. This experiment asks whether prompt content contains
-enough signal for safe replacement and remains the default notebook mode.
+remain in one split. For example, two MMLU rows with identical rendered question
+and choices cannot enter train and test separately. This experiment asks whether
+prompt content contains enough signal for safe replacement and remains the
+default notebook mode.
 
 ### 2. Dataset-OOD stress test
 
@@ -401,43 +443,49 @@ The immutable run IDs are:
 
 | Run ID | Split claim | Seed |
 |---|---|---:|
-| `random_seed_42` | prompt-level feasibility | 42 |
-| `random_seed_43` | prompt-level feasibility | 43 |
-| `random_seed_44` | prompt-level feasibility | 44 |
-| `dataset_ood_seed_42` | unseen-dataset stress test | 42 |
-| `dataset_ood_seed_43` | unseen-dataset stress test | 43 |
-| `dataset_ood_seed_44` | unseen-dataset stress test | 44 |
+| `qwen25_random_seed_42` | prompt-level feasibility | 42 |
+| `qwen25_random_seed_43` | prompt-level feasibility | 43 |
+| `qwen25_random_seed_44` | prompt-level feasibility | 44 |
+| `qwen25_dataset_ood_seed_42` | unseen-dataset stress test | 42 |
+| `qwen25_dataset_ood_seed_43` | unseen-dataset stress test | 43 |
+| `qwen25_dataset_ood_seed_44` | unseen-dataset stress test | 44 |
 
 Only `RUN_ID` changes between Colab sessions. The loss, three setup ablations,
 candidate facts, threshold grid, confidence gates, and analytical scenario remain
-fixed, including the scenario identity date `2026-08-19` inherited from the
-completed seed-42 contract. See the [`Colab runbook`](docs/COLAB_RUNBOOK.md).
+fixed, including the v3 scenario identity date `2026-08-21`. The candidate quality
+evidence tag also freezes model and dataset revisions, prompt template, sampling,
+quantization, and deterministic generation settings. See the
+[`Colab runbook`](docs/COLAB_RUNBOOK.md).
 
 ## Train entirely in Google Colab
 
-[Open notebook 02 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/develop/notebooks/02_train_modernbert_hybrid_poc.ipynb)
+[Open notebook 03 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/develop/notebooks/03_train_modernbert_qwen_tiers_poc.ipynb)
 
 1. Select **Runtime → Change runtime type → GPU**.
-2. Set `RUN_ID = "random_seed_43"` and run every cell from top to bottom.
-3. Let all three declared setups finish; three setups take about three times as
-   long as a single training run.
-4. Inspect the validation-only comparison, threshold frontier, and measured
+2. Leave `RUN_ID = "qwen25_random_seed_42"` for the first run and execute every
+   cell from top to bottom. Authorize Google Drive so the 2,700 candidate
+   outcomes survive a Colab disconnect.
+3. The first execution collects three pinned Qwen outcome panels one model at a
+   time. Later seeds reuse the evidence cache and train only the router.
+4. Let all three router setups finish, then inspect the validation-only setup
+   comparison, threshold frontier, and measured
    ModernBERT p50/p95 versus break-even overhead.
 5. Use the Gradio share link to demonstrate safety probability, fallback use,
    analytical candidate latency, and estimated savings.
-6. Download the generated `random_seed_43` ZIP.
-7. Repeat with `random_seed_44`, then the three `dataset_ood_seed_*` run IDs.
+6. Download the generated `qwen25_random_seed_42` ZIP.
+7. Repeat random seeds 43 and 44. Run the three `qwen25_dataset_ood_seed_*`
+   artifacts separately only after random feasibility is understood.
 
-The notebook downloads LLMRouterBench, checks candidate names, proves
-completion-length leakage is absent, audits prompt-content groups, runs
-validation-only sensitivity scenarios, trains and calibrates ModernBERT with
-epoch-level logs and early stopping, compares the declared setups on validation,
-visualizes training, calibration, threshold, dataset, overhead, and truncation
-behavior, freezes one setup with a validation safety margin and threshold
-stability rule, opens the sealed test once, and exports a reconstructable
-artifact plus report. It then measures ModernBERT only and launches a routing
-demo whose candidate latency remains analytical. The canonical notebook is
-intentionally stored without execution output; the downloaded ZIP is the run
+The notebook downloads six pinned public evaluation datasets, samples 150 rows
+from each, collects deterministic 4-bit outcomes from the three pinned Qwen2.5
+checkpoints, proves completion-length leakage is absent, audits prompt-content
+groups, runs validation-only sensitivity scenarios, trains and calibrates
+ModernBERT with epoch-level logs and early stopping, and compares the declared
+setups on validation. It freezes one setup with a validation safety margin and
+threshold-stability rule, opens the sealed test once, and exports a
+reconstructable artifact plus scored evidence. It then measures ModernBERT only
+and launches a demo whose candidate latency remains analytical. The canonical v3
+notebook is intentionally stored without execution output; the ZIP is the run
 record.
 
 The current investor-facing summary and honest limitations are in
@@ -448,8 +496,8 @@ funding is described in
 Each epoch log reports train and validation loss, whether it became the best
 checkpoint, wall-clock seconds, training examples per second, cumulative skipped
 mixed-precision steps, and whether early stopping will fire. For example, if an
-epoch processes 8,425 examples in 300 seconds, the log reports approximately
-$8425/300=28.1$ training examples per second.
+epoch processes 540 pilot training examples in 30 seconds, the log reports
+$540/30=18$ training examples per second.
 
 The resolver may warn about Colab's unused Gradio installation. That warning is
 not a router-training failure.
@@ -458,6 +506,10 @@ not a router-training failure.
 
 The report directory contains:
 
+- `qwen_candidate_records.parquet`: all 2,700 scored, pinned candidate outcomes;
+- `qwen_candidate_panel_summary.csv`: quality and analytical latency by tier;
+- `qwen_evidence_contract.json`: evidence tag, model and dataset revisions,
+  prompt template, sampling, quantization, and generation policy;
 - `strategy_summary.csv`: baselines, oracle, router, and oracle-savings capture;
 - `threshold_search.csv`: validation quality/savings frontier;
 - `setup_comparison.csv`: validation-only setup leaderboard and the one row
@@ -505,7 +557,11 @@ exported artifact sets `deployment_enabled` only when both validation activation
 and the sealed-test single-run gate pass. Its reproducibility block records the
 repository commit, Python and package versions, GPU, and CUDA runtime.
 
-## Command-line equivalents
+## Historical LLMRouterBench command-line equivalents
+
+The CLI commands below reproduce notebook 02's public-benchmark line of work.
+Notebook 03 is the canonical three-tier Qwen workflow because its pinned quality
+collection step is intentionally explicit in the notebook.
 
 Feasibility:
 
@@ -579,7 +635,8 @@ audits.md                                   # historical runs and design changes
 
 notebooks/
 ├── 01_train_modernbert_router.ipynb       # historical measured-latency run
-└── 02_train_modernbert_hybrid_poc.ipynb   # recommended calibrated Colab POC
+├── 02_train_modernbert_hybrid_poc.ipynb   # executed historical 7B/8B run
+└── 03_train_modernbert_qwen_tiers_poc.ipynb # recommended three-tier Colab POC
 
 src/llm_router/
 ├── analytical_latency.py       # measurement-free latency equations

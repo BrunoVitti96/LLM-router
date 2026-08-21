@@ -31,6 +31,10 @@ notebook = [
   "matplotlib>=3.8",
 ]
 quantization = ["bitsandbytes>=0.43"]
+qwen-evaluation = [
+  "bitsandbytes>=0.43",
+  "datasets>=3.0",
+]
 dev = ["pytest>=8", "ruff>=0.6"]
 
 [tool.setuptools.packages.find]

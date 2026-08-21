@@ -1,70 +1,80 @@
-# Calibrated ModernBERT LLM router — POC investor brief
+# Calibrated ModernBERT LLM router — investor brief
 
 ## The opportunity
 
 Organizations often send every prompt to their strongest model because a cheap
-router can save money only if it does not create an unacceptable quality loss.
-This project trains ModernBERT to answer a narrower, auditable question: “Can a
-faster candidate preserve the recorded quality of the trusted fallback for this
-prompt?” The deployed selector chooses a faster candidate only when calibrated
-safety and analytical speed gates both pass; otherwise it fails closed.
+router is valuable only if it does not create an unacceptable quality loss. This
+project trains ModernBERT to answer a narrow, auditable question: “Can a smaller
+model preserve the recorded quality of the trusted fallback for this prompt?”
+The selector uses a smaller tier only when calibrated safety and analytical
+speed gates both pass; otherwise it fails closed.
 
-The initial customer is a high-volume enterprise AI platform team operating two
-or more LLMs behind a shared API. The economic buyer is typically a head of AI
-platform, inference engineering, or AI FinOps. Secondary customers are inference
-providers and API gateways that can expose routing as an infrastructure feature.
-Low-volume teams using one model are not the initial target because small routing
-savings may not justify another production component.
+The initial customer is a high-volume enterprise AI platform team operating
+multiple models behind one API. The likely buyer is a head of AI platform,
+inference engineering, or AI FinOps. Inference providers and API gateways are
+secondary customers. Low-volume, single-model teams are not the initial target.
 
-## Current evidence
+## What the latest evidence actually says
 
-The schema-v5 random-split seed-42 run evaluated one frozen policy on 2,812
-sealed-test prompts. It routed 345 prompts (12.27%) from Qwen3-8B to Fin-R1,
-gained 27 correct answers, lost 15, and finished 12 answers ahead of fallback.
-Its quality-retention point estimate was 100.60% and its one-sided 95% lower
-confidence bound was 100.07%, above the predeclared 98% test gate. Routed safety
-precision was 95.65% with a 93.46% lower bound. All aggregate, macro-dataset,
-harm-rate, guarded-dataset, conservative-overhead, and threshold-stability gates
-passed.
+The latest completed notebook-02 run used random seed 44 and a narrow Fin-R1
+7.0B/Qwen3-8B 8.2B panel. It routed 623 of 2,805 sealed-test prompts (22.21%),
+gained 43 correct answers, lost 52, and ended nine answers behind fallback. Its
+aggregate quality-retention lower bound was 98.73%, but it failed three other
+predeclared gates: macro-dataset quality, routed safety precision, and guarded
+worst-dataset quality. Therefore `single_run_passed=False` is the correct result.
 
-Candidate latency is analytical. Under the frozen scenario, mean fallback
-latency was 1.8846 seconds. The router saved 1.22% at an assumed 4 ms overhead
-and 0.37% at 20 ms; break-even overhead was 26.93 ms. Numerically, 1.8846 seconds
-multiplied by 1.22% is about 22.9 ms net savings per request. At one million
-requests that is approximately 22,900 aggregate seconds, or 6.4 compute-hours,
-before translating hardware time into a customer-specific monetary value.
+The task mix explains why an attractive average would be misleading. MBPP gained
+17 net answers, while FinQA lost nine and MMLU-Pro lost seven. Numerically,
+$43-52=-9$. The router was useful on some code prompts and unsafe on several
+knowledge/reasoning groups.
 
-## What is genuinely differentiated
+Economics were positive only around the median. Analytical savings were 2.52%
+at the frozen 4 ms router assumption and 1.68% at 20 ms. The frozen policy broke
+even at 52.14 ms. Measured ModernBERT end-to-end overhead was 42.55 ms at p50 and
+67.23 ms at p95, so p50 was viable while p95 was not.
+
+## What v3 changes
+
+Notebook 03 replaces the old $7.0/8.2=85.4\%$ parameter ratio with three pinned
+Qwen2.5 capacity tiers: 1.54B, 3.09B, and 7.61B. The small tier is only
+$1.54/7.61=20.2\%$ of the strong tier's parameter count, creating materially
+more analytical room for router overhead.
+
+V3 collects 900 prompts across six public tasks and three candidates, producing
+2,700 scored quality outcomes. Model and dataset revisions, sampling, prompt
+template, deterministic generation, and 4-bit quantization are fingerprinted.
+The router still uses validation-only setup and threshold selection, per-candidate
+Platt calibration, duplicate-content grouping, subgroup and harm gates, two
+adjacent feasible thresholds, and exactly one sealed-test opening per run.
+
+## What is differentiated
 
 - The router predicts fallback-relative safety, not absolute correctness.
-- Platt calibration and validation-only threshold selection are out-of-fold.
-- Normalized prompt hashes prevent duplicate question content crossing splits.
-- The test opens only after setup and threshold selection freeze.
-- A policy needs at least two adjacent feasible thresholds, not one lucky point.
-- Reports expose harm, subgroup retention, truncation, calibration, and overhead.
-- The exported artifact restores the best validation epoch rather than the last
-  overfitted epoch.
+- Two independent safety heads can choose small, middle, or fallback tiers.
+- Calibration and threshold selection are out-of-fold and validation-only.
+- Prompt hashes prevent duplicate content crossing random splits.
+- Policies need a stable threshold region, not one lucky grid value.
+- Reports expose harm, subgroup retention, truncation, and router overhead.
+- Candidate quality evidence is pinned; candidate latency remains analytical.
 
-## Limitations stated plainly
+## Honest commercial position
 
-This is single-run feasibility evidence, not a production or universal-routing
-claim. MBPP contributed +18 net answers while the overall net was +12; excluding
-MBPP leaves the other datasets at -6. Calibration was strong, but AUROC was
-0.739 and the policy recalled only 15.31% of safe faster opportunities. Candidate
-latency has not been measured, by design, and ModernBERT overhead still needs a
-named target-hardware distribution. Multi-seed and dataset-OOD evidence is not
-yet complete.
+This is not yet a “we reduced production cost” story. It is a disciplined
+prototype that found a negative result, diagnosed why, and built a stronger test.
+The investable proposition is the evidence system and bounded validation plan:
+three random seeds, three dataset-OOD seeds, target-hardware router timing, and a
+design-partner pilot. V3 must be run before publishing any new savings claim.
+
+A defensible LinkedIn statement today is: “We built a calibrated router that
+failed closed when a narrow model panel was unsafe, and we are now testing a
+three-tier Qwen panel with a fivefold parameter span.” A claim that the product
+already saves a guaranteed percentage or dollar amount would exceed the evidence.
 
 ## Fundable next step
 
-Funding would validate rather than assume scale benefits: complete random seeds
-42/43/44, run separate dataset-OOD seeds, measure only the ModernBERT decision
-path on target hardware, expand to a non-dominated candidate panel with existing
-quality results, and run a high-volume design-partner pilot. Candidate latency
-will remain analytical during this POC phase so capital is spent on routing
-evidence rather than repeatedly loading large candidate LLMs in Colab.
-
-The near-term investment proposition is therefore: a disciplined feasibility
-result, a reproducible evidence pipeline, and a bounded plan to determine whether
-the router becomes a general platform, a domain-specific product, or a negative
-result that safely defaults to fallback.
+Funding should buy validation rather than optimism: complete the v3 evidence
+cache, publish all six run artifacts, measure ModernBERT p50/p95 on target
+hardware, expand beyond the 900-prompt pilot, and run a paid design partnership
+with aggregate quality audits. The milestone has three acceptable outcomes:
+general router, domain-specific router, or a negative result that safely stays
+on fallback.
