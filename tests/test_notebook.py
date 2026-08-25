@@ -121,8 +121,14 @@ def test_qwen_tier_v3_notebook_is_clean_didactic_and_syntactically_valid():
         "benchmark_modernbert_overhead",
         'candidate_latency="analytical-only"',
         "qwen_candidate_records.parquet",
+        "qwen_quality_audit.csv",
         "qwen_evidence_contract.json",
         "published_evaluation_metadata.json",
+        "audit_aligned_outcomes",
+        "published_binary_score",
+        "correctness_policy",
+        "is_correct",
+        "correct / outcomes",
         "create_gradio_demo",
         "files.download",
         "Final interpretation checklist",
@@ -133,6 +139,7 @@ def test_qwen_tier_v3_notebook_is_clean_didactic_and_syntactically_valid():
     assert "AutoModelForCausalLM" not in full_text
     assert "BitsAndBytesConfig" not in full_text
     assert ".generate(" not in full_text
+    assert "pipeline(" not in full_text
 
     for cell in code_cells:
         source = "".join(cell["source"])

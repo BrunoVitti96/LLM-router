@@ -28,6 +28,24 @@ add it to Colab secrets as `HF_TOKEN`:
 The token downloads JSONL and evaluation metadata. The notebook downloads one
 Qwen tokenizer only to count tokens; tokenization is not model inference.
 
+## Correctness and quality audit
+
+The detail files already contain task-aware per-example grading. The notebook
+does not regenerate an answer and does not replace those graders with a generic
+string comparison. It requires each selected metric to be exactly 0 (incorrect)
+or 1 (correct), stores the same result as `is_correct`, and calculates:
+
+$$
+\text{quality}=\frac{\text{correct published outcomes}}
+{\text{all published outcomes}}.
+$$
+
+For example, 255 correct outcomes among 300 records produce 85% quality. The
+run stops before ModernBERT training if a score is fractional, metrics conflict,
+a prompt/model pair is duplicated, prompts or metrics disagree across models,
+or any prompt lacks one of the three Qwen outcomes. Inspect and retain
+`qwen_quality_audit.csv` in the downloaded ZIP.
+
 ## Frozen evidence contract
 
 The three pinned repositories contain the same 39 task files. V3 removes GPQA
@@ -66,6 +84,7 @@ p95 is 95 ms, median economics pass but tail economics do not.
 Before closing Colab:
 
 - confirm all retained keys have three published outcomes;
+- confirm `score` and `is_correct` agree and inspect `qwen_quality_audit.csv`;
 - confirm `qwen_weights_loaded=False` in the evidence log;
 - inspect the published metric used by every task;
 - confirm the ZIP name matches `RUN_ID`;

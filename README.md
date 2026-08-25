@@ -401,7 +401,7 @@ official Qwen2.5 instruction-tuned tiers:
 |---|---|---|---|
 | `Qwen2.5-1.5B` | small replacement | 1.54B, autoregressive | published per-example details |
 | `Qwen2.5-3B` | middle replacement | 3.09B, autoregressive | published per-example details |
-| `Qwen2.5-7B` | potential strong fallback | 7.61B, autoregressive | published per-example details |
+| `Qwen2.5-7B` | large, roughly 8B-class potential fallback | 7.61B, autoregressive | published per-example details |
 
 The pinned official model cards are
 [`Qwen/Qwen2.5-1.5B-Instruct`](https://huggingface.co/Qwen/Qwen2.5-1.5B-Instruct),
@@ -421,6 +421,32 @@ notebook does not assume quantization preserves every answer.
 The fallback is still selected from training quality rather than forced by size;
 if 7B is not strongest on the training evidence, the notebook reports that
 instead of assuming parameter count guarantees quality.
+
+### How recorded answers become quality
+
+In plain language, Colab does not ask any Qwen model to answer a question. It
+downloads the answer and the benchmark's already-computed per-example result,
+then makes that result explicit as `is_correct=False` or `is_correct=True`.
+Quality is the fraction of recorded answers marked correct. For example, if the
+published grader marks 240 of 300 Qwen2.5-3B answers correct, the notebook
+reports quality $240/300=80\%$.
+
+Technically, the loader uses a fixed priority of published task-aware binary
+metrics (`prompt_level_strict_acc,none`, `exact_match,none`, `acc_norm,none`,
+then `acc,none`). It accepts only exact 0/1 per-example values. A fractional
+value, conflicting fallback metrics, duplicate prompt/model pair, inconsistent
+prompt or metric across models, or a prompt missing any of the three candidates
+stops the run. This is deliberately different from naively comparing answer
+strings: the 37 tasks have different correctness rules, so their published
+task-aware graders remain the source of truth.
+
+The audited `score` supplied to the router is exactly
+`is_correct.astype(float)`. The ZIP exports both the full recorded answers in
+`qwen_candidate_records.parquet` and an inspectable `qwen_quality_audit.csv`
+with outcome, correct, incorrect, and quality counts by task, model, and metric.
+The metric priority, binary-value requirement, and quality formula are part of
+the hashed evidence contract, so changing correctness rules changes the
+`EVIDENCE_TAG`.
 
 The v3 panel contains no diffusion model. Do not relabel an autoregressive
 candidate as diffusion. Add a diffusion candidate only when comparable scored
@@ -480,13 +506,16 @@ IDs, task exclusions, the per-task cap, and deterministic sampling seed. See the
    secrets.
 3. The notebook downloads pinned JSONL answer evidence and one Qwen tokenizer for
    token counting. It never downloads or runs Qwen model weights.
-4. Let all three router setups finish, then inspect the validation-only setup
+4. Confirm the displayed correctness audit has only binary outcomes and one row
+   for every task/model/metric combination. Any incomplete or ambiguous panel
+   fails before router training.
+5. Let all three router setups finish, then inspect the validation-only setup
    comparison, threshold frontier, and measured
    ModernBERT p50/p95 versus break-even overhead.
-5. Use the Gradio share link to demonstrate safety probability, fallback use,
+6. Use the Gradio share link to demonstrate safety probability, fallback use,
    analytical candidate latency, and estimated savings.
-6. Download the generated `qwen25_random_seed_42` ZIP.
-7. Repeat random seeds 43 and 44. Run the three `qwen25_dataset_ood_seed_*`
+7. Download the generated `qwen25_random_seed_42` ZIP.
+8. Repeat random seeds 43 and 44. Run the three `qwen25_dataset_ood_seed_*`
    artifacts separately only after random feasibility is understood.
 
 The notebook downloads three pinned Open LLM Leaderboard detail repositories,
@@ -520,6 +549,8 @@ not a router-training failure.
 The report directory contains:
 
 - `qwen_candidate_records.parquet`: sampled, aligned, published candidate outcomes;
+- `qwen_quality_audit.csv`: correct, incorrect, total, and quality counts by
+  task, candidate, and published binary metric;
 - `published_evaluation_metadata.json`: the complete pinned leaderboard run metadata;
 - `qwen_candidate_panel_summary.csv`: quality and analytical latency by tier;
 - `qwen_evidence_contract.json`: evidence tag, model and dataset revisions,

@@ -8,6 +8,38 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-08-25 — Fail-closed published-correctness audit for Qwen v3
+
+The canonical notebook already downloaded recorded Open LLM Leaderboard answers
+and per-example metrics rather than running the three Qwen candidates. This
+update made that quality contract executable and inspectable instead of relying
+on a permissive `0 <= score <= 1` assertion.
+
+In plain language, every downloaded answer now has an explicit yes/no
+`is_correct` field. The notebook refuses to train the router if an outcome is
+not clearly correct or incorrect, if a question is missing one of the small,
+middle, or large-tier results, or if aligned models disagree about the prompt or
+grader. It exports `qwen_quality_audit.csv`, so a Colab user can directly inspect
+the arithmetic. For example, 240 correct rows and 60 incorrect rows give
+$240/(240+60)=80\%$ quality.
+
+Technically, `llm_router.qwen_evidence` now freezes the ordered panel as
+Qwen2.5-1.5B (1.54B), Qwen2.5-3B (3.09B), and Qwen2.5-7B (7.61B, the roughly
+8B-class tier). Metric extraction prefers `prompt_level_strict_acc,none`,
+`exact_match,none`, `acc_norm,none`, and `acc,none`; conservative fallback
+metrics must be binary and mutually agree. The aligned-panel audit requires
+exact three-model coverage, unique key/model pairs, nonempty prompts, consistent
+task/document/prompt/metric identities, finite binary scores, and the identity
+`score == is_correct.astype(float)`. Unit and notebook-contract tests cover the
+new failure modes. The correctness policy is now included in the hashed evidence
+contract, so this stricter loader produces a new `EVIDENCE_TAG` even when the
+pinned dataset revisions and sampling seed stay unchanged.
+
+No Qwen generation was added. The only trainable/inference model in notebook 03
+remains the ModernBERT router. Candidate latency remains analytical, and the
+routing loss, calibration method, threshold gates, and sealed-test policy did
+not change.
+
 ## 2026-08-21 — Seed-44 failure and three-tier Qwen v3
 
 ### What the completed seed-44 run showed
