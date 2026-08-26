@@ -36,6 +36,20 @@ def test_published_binary_score_prefers_named_correctness_metric():
     assert score == 1.0
 
 
+def test_published_binary_score_prefers_ifeval_prompt_level_strict_metric():
+    metric, score = published_binary_score(
+        {
+            "doc_id": 7,
+            "inst_level_loose_acc": 1.0,
+            "inst_level_strict_acc": 1.0,
+            "prompt_level_loose_acc": 1.0,
+            "prompt_level_strict_acc": 0.0,
+        }
+    )
+    assert metric == "prompt_level_strict_acc"
+    assert score == 0.0
+
+
 def test_published_binary_score_rejects_fractional_or_ambiguous_metrics():
     with pytest.raises(ValueError, match="binary 0/1"):
         published_binary_score({"exact_match,none": 0.5})

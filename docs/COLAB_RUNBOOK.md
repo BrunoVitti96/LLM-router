@@ -6,6 +6,13 @@ Open `notebooks/03_train_modernbert_qwen_tiers_poc.ipynb` in a fresh GPU Colab.
 It downloads published per-example prompts, Qwen answers, and correctness scores,
 then trains ModernBERT. It does **not** download or run Qwen model weights.
 
+The canonical notebook currently uses the repository's `poc` branch. Its first
+cell fetches and switches `/content/LLM_Router` to `poc`, installs that checkout,
+and confirms `src/llm_router/qwen_evidence.py` exists. If an older Colab session
+already cloned `develop`, rerunning the setup cell switches that checkout before
+imports. A missing helper is reported as a repository/source mismatch rather
+than a generic Python import failure.
+
 Run and download one ZIP at a time:
 
 1. `qwen25_random_seed_42`
@@ -25,8 +32,34 @@ add it to Colab secrets as `HF_TOKEN`:
 - `open-llm-leaderboard/Qwen__Qwen2.5-3B-Instruct-details`; and
 - `open-llm-leaderboard/Qwen__Qwen2.5-7B-Instruct-details`.
 
+In Colab, open the **Secrets** panel with the key icon in the left sidebar,
+choose **Add new secret**, set the name to exactly `HF_TOKEN`, paste the token as
+the value, and turn on **Notebook access**. The name is case-sensitive. For
+example, `hf_token`, `HF-TOKEN`, and a disabled `HF_TOKEN` are all unavailable
+to `userdata.get("HF_TOKEN")`. After adding it, rerun the configuration cell;
+there is no need to run or download any Qwen weights.
+
+If you do not create a Colab secret, the same cell now displays a hidden
+session-only prompt. Paste the read token there and press Enter. For example,
+with zero configured secrets the cell asks once; after one nonempty token is
+entered, all three evidence repositories reuse that in-memory value. The token
+is not echoed, written to notebook output, or placed in the exported report.
+
 The token downloads JSONL and evaluation metadata. The notebook downloads one
 Qwen tokenizer only to count tokens; tokenization is not model inference.
+
+### If the second cell returns `401 GatedRepoError`
+
+Authentication and gated-dataset approval are separate. First, the notebook
+calls `whoami()` to confirm that the token itself is valid. It then attempts a
+pinned file download. If that download returns 401, open the reported dataset
+URL while signed into the same Hugging Face account, accept its access
+conditions, and confirm the token has **Read access to gated repositories**.
+Repeat this for all three Qwen detail datasets and rerun the cell.
+
+For example, one valid read token plus approvals for only two of three datasets
+still produces an incomplete panel and must stop. One valid read token plus all
+three approvals permits the notebook to download the three aligned result sets.
 
 ## Correctness and quality audit
 

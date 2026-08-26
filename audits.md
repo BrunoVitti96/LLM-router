@@ -8,6 +8,113 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-08-26 — Unsuffixed IFEval strict metric accepted explicitly
+
+The first authenticated notebook-03 evidence download reached IFEval and then
+stopped before alignment or training. Those published rows expose four binary
+fields—loose and strict scores at instruction and prompt level—but use the key
+`prompt_level_strict_acc` without the `,none` suffix recognized by the frozen
+priority. Because the generic fallback requires all accuracy-like fields to
+agree, a row with different loose and strict outcomes correctly failed as
+ambiguous under the old implementation.
+
+In plain language, the benchmark supplied several related report-card marks,
+and the loader had not recognized the exact spelling of the one the experiment
+had already chosen. The fix recognizes that spelling instead of averaging or
+silently choosing a more favorable score.
+
+Technically, `BINARY_METRIC_PRIORITY` now places the unsuffixed IFEval
+`prompt_level_strict_acc` immediately after its suffixed alias and before every
+generic fallback. A regression test supplies all four disagreeing IFEval fields
+and requires the strict prompt-level value. For example, loose prompt accuracy
+1 and strict prompt accuracy 0 now produce `is_correct=False`; the result is not
+reclassified as correct by either loose or instruction-level accuracy. This
+changes the hashed correctness policy and therefore the notebook evidence tag,
+but it does not change the router loss, split, calibration, latency model, or
+quality gates. The failed partial notebook output was cleared so the canonical
+notebook can be run from the first cell with the corrected companion source.
+
+## 2026-08-26 — Gated-repository 401 split into token and approval checks
+
+The next Colab run supplied `HF_TOKEN` but the first pinned Qwen2.5-1.5B results
+file returned `401 GatedRepoError`. Hugging Face authentication and dataset
+approval are separate: a syntactically present token can still be invalid, can
+lack gated-repository read scope, or can belong to an account that has not
+accepted the dataset conditions.
+
+In plain language, possessing a key does not mean the account has accepted the
+door's terms. All three dataset doors must be approved for a complete panel.
+
+Technically, the evidence cell now calls `HfApi.whoami()` before downloads. An
+invalid token produces a token-specific recovery message. Every pinned file
+download catches `GatedRepoError` and reports the exact access URL, the need to
+accept conditions with the token's account, and the required gated-repository
+read permission. Numerically, approvals for two of three repositories yield an
+incomplete candidate panel and zero router training; approvals for three of
+three allow up to 33,300 aligned outcomes to proceed to the existing audits.
+
+## 2026-08-26 — Missing secret now falls back to hidden token entry
+
+The actionable missing-secret error still interrupted Colab `Run all`. Notebook
+03 now treats the Colab secret as the convenient path, not the only path. When
+`userdata.get("HF_TOKEN")` raises `SecretNotFoundError`, `NotebookAccessError`,
+or `TimeoutException`, the cell reports only the exception class and opens a
+`getpass` prompt. Unexpected exceptions still surface normally.
+
+In plain language, a user with no saved Colab secret can paste the Hugging Face
+read token once without exposing it on screen. The token lives only in memory
+for that runtime.
+
+Technically, credential precedence is environment variable, enabled Colab
+secret, then hidden interactive input. An empty interactive value still fails
+closed because gated evidence cannot be downloaded anonymously. Numerically,
+zero configured secrets plus one pasted nonempty token yields one in-memory
+credential reused for three pinned evidence repositories; zero secrets plus an
+empty prompt yields zero credentials and zero network requests. No token is
+written to notebook output, evidence artifacts, or the report ZIP.
+
+## 2026-08-26 — Missing Colab Hugging Face secret made actionable
+
+After the branch fix succeeded, the next notebook-03 run imported the router
+package from `poc` and then stopped in configuration cell 4 with
+`SecretNotFoundError: Secret HF_TOKEN does not exist`. This is an access setup
+failure, not a Qwen inference, evidence-quality, or ModernBERT training failure.
+Zero dataset rows were downloaded and zero models were run.
+
+In plain language, the gated answer files require a key, but the Colab notebook
+did not have a key named `HF_TOKEN`. The notebook cannot and should not bypass
+the dataset owner's access controls.
+
+Technically, token discovery now first accepts an `HF_TOKEN` environment
+variable for non-Colab execution, then requests the Colab secret. Colab secret
+lookup exceptions are converted into one actionable `RuntimeError` explaining
+the exact case-sensitive name, Secrets-panel key icon, and notebook-access
+toggle. For example, a secret named `hf_token` or a disabled `HF_TOKEN` yields
+zero usable credentials; an enabled secret named exactly `HF_TOKEN` yields one
+credential passed to every pinned Hugging Face dataset request. The README,
+runbook, notebook Markdown, and notebook contract test now preserve those steps.
+
+## 2026-08-26 — Colab branch mismatch fixed before evidence loading
+
+An executed notebook-03 run stopped in configuration cell 4 with
+`ModuleNotFoundError: No module named 'llm_router.qwen_evidence'`. The setup cell
+had cloned and installed `develop`, while the executed notebook came from `poc`,
+where the new correctness-audit module exists. No Qwen evidence was downloaded,
+no Qwen candidate was run, and ModernBERT training never started.
+
+In plain language, the notebook and its supporting code came from different
+versions. This is like using chapter 3 instructions with a chapter 2 toolkit:
+the requested tool is absent before the experiment begins.
+
+Technically, notebook 03 now freezes `REPOSITORY_BRANCH = "poc"`, fetches and
+switches an existing Colab checkout to that branch, pulls it with `--ff-only`,
+installs the selected checkout, and preflights
+`src/llm_router/qwen_evidence.py`. The README Colab URL now opens the same
+branch. For a numerical execution example, the failed run completed 2 setup/
+configuration cells and 0 evidence, training, validation, or test cells; after
+the fix, a missing companion file stops in setup with an actionable version-
+mismatch message.
+
 ## 2026-08-25 — Fail-closed published-correctness audit for Qwen v3
 
 The canonical notebook already downloaded recorded Open LLM Leaderboard answers

@@ -21,6 +21,7 @@ QWEN_TIER_PARAMETERS_BILLIONS = {
 
 BINARY_METRIC_PRIORITY = (
     "prompt_level_strict_acc,none",
+    "prompt_level_strict_acc",
     "exact_match,none",
     "acc_norm,none",
     "acc,none",

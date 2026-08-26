@@ -432,13 +432,21 @@ published grader marks 240 of 300 Qwen2.5-3B answers correct, the notebook
 reports quality $240/300=80\%$.
 
 Technically, the loader uses a fixed priority of published task-aware binary
-metrics (`prompt_level_strict_acc,none`, `exact_match,none`, `acc_norm,none`,
-then `acc,none`). It accepts only exact 0/1 per-example values. A fractional
-value, conflicting fallback metrics, duplicate prompt/model pair, inconsistent
-prompt or metric across models, or a prompt missing any of the three candidates
-stops the run. This is deliberately different from naively comparing answer
-strings: the 37 tasks have different correctness rules, so their published
-task-aware graders remain the source of truth.
+metrics (`prompt_level_strict_acc,none`, its unsuffixed IFEval form
+`prompt_level_strict_acc`, `exact_match,none`, `acc_norm,none`, then
+`acc,none`). The explicit IFEval rule intentionally chooses strict prompt-level
+success when its instruction-level and loose metrics disagree. It accepts only
+exact 0/1 per-example values. A fractional value, conflicting unrecognized
+fallback metrics, duplicate prompt/model pair, inconsistent prompt or metric
+across models, or a prompt missing any of the three candidates stops the run.
+This is deliberately different from naively comparing answer strings: the 37
+tasks have different correctness rules, so their published task-aware graders
+remain the source of truth.
+
+For example, an IFEval row with loose prompt accuracy 1 and strict prompt
+accuracy 0 is recorded as incorrect because the frozen policy selects the
+strict score. The other published diagnostic fields remain available in the
+source evidence but do not override that task-level correctness label.
 
 The audited `score` supplied to the router is exactly
 `is_correct.astype(float)`. The ZIP exports both the full recorded answers in
@@ -497,13 +505,28 @@ IDs, task exclusions, the per-task cap, and deterministic sampling seed. See the
 
 ## Train entirely in Google Colab
 
-[Open notebook 03 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/develop/notebooks/03_train_modernbert_qwen_tiers_poc.ipynb)
+[Open notebook 03 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/poc/notebooks/03_train_modernbert_qwen_tiers_poc.ipynb)
+
+Notebook 03 and its companion Python source currently live on the `poc` branch.
+The setup cell explicitly checks out that branch and verifies that
+`src/llm_router/qwen_evidence.py` exists before importing anything. This avoids
+mixing a new notebook with older `develop` code. For example, a notebook that
+expects `qwen_evidence.py` but installs a branch without it fails before any of
+the three Qwen datasets or the ModernBERT router can be used.
 
 1. Select **Runtime → Change runtime type → GPU**.
 2. Leave `RUN_ID = "qwen25_random_seed_42"` for the first run and execute every
    cell from top to bottom. Accept access to the three auto-gated Open LLM
    Leaderboard detail datasets and add a read token named `HF_TOKEN` to Colab
-   secrets.
+   secrets. In Colab, click the key icon in the left sidebar, create the secret
+   with that exact name, paste the token as its value, and enable notebook
+   access. A secret that exists but is not enabled is still unavailable. If no
+   usable secret exists, the notebook falls back to a hidden prompt: paste the
+   token once for the current Colab session. It is not printed or saved in the
+   notebook. A `401 GatedRepoError` after token entry means either the account
+   has not accepted that dataset's conditions or the token lacks read access to
+   gated repositories; accept all three pages using the same account and use a
+   read-capable token.
 3. The notebook downloads pinned JSONL answer evidence and one Qwen tokenizer for
    token counting. It never downloads or runs Qwen model weights.
 4. Confirm the displayed correctness audit has only binary outcomes and one row
