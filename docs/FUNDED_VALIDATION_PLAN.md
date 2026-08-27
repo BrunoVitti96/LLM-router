@@ -13,8 +13,9 @@ weak generalization result is reported rather than optimized away.
 
 Run `qwen25_v4_dataset_ood_seed_42`, `qwen25_v4_dataset_ood_seed_43`, and
 `qwen25_v4_dataset_ood_seed_44` as separate artifacts. Entire datasets must
-remain disjoint. Every run uses the same rank-4 safety-only loss, all 15 epochs,
-validation-best checkpoint, calibration, threshold grid, and gates. Publish every
+remain disjoint. Every run uses the same rank-4 safety-only loss, all five
+epochs, per-mini-batch loss logging, validation-best checkpoint, calibration,
+threshold grid, and gates. Publish every
 artifact and a cross-seed table. The shared sampled Open LLM Leaderboard evidence
 must keep one fingerprint across all seeds. Exit evidence includes activation
 rate, quality-retention LCB, routed safety

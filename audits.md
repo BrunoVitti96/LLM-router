@@ -8,6 +8,36 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-08-27 — V4 reduced to five epochs with per-step loss logging
+
+Before any v4 result was produced, the notebook training schedule changed from
+15 to five complete epochs. In plain language, Colab now gives feedback after
+every training mini-batch instead of appearing silent until an epoch finishes.
+It still compares validation after each epoch and keeps the best checkpoint.
+
+Technically, notebook 04 now freezes `EPOCHS=5`, `MINIMUM_EPOCHS=5`, and
+`EARLY_STOPPING_PATIENCE=None`. The shared trainer gained an optional,
+backward-compatible `step_progress_callback` invoked once after every optimizer
+step. Its payload includes epoch, step within epoch, global step, batch size,
+current total loss, current safety loss, inactive oracle diagnostic, running
+training-loss average, and mixed-precision skip status. Existing callers that do
+not provide the callback retain their previous behavior.
+
+For example, with 517 training prompts and batch size 8, an epoch has
+$\lceil517/8\rceil=65$ optimizer steps and the five-epoch run has 325 printed
+step records. A line such as `step=12/65 loss=0.384210 safety=0.384210
+running=0.417832` reports the current mini-batch and running average. Because
+the oracle coefficient remains zero, active total and safety loss are equal.
+The validation loss is not replaced by these noisy step values: if epoch 3 has
+validation loss 0.181 and epoch 5 has 0.196, epoch 3 is restored.
+
+The README, v4 notebook Markdown and metadata, Colab runbook, investor
+documents, funded-validation plan, and notebook contract tests now describe the
+five-epoch schedule and per-step output. A trainer regression test verifies one
+callback event per mini-batch. The loss, LoRA rank, calibration, thresholds,
+OOD split, sealed-test gates, charts, exports, and final interactive showcase
+are unchanged. V4 remains unexecuted, so this change creates no new result.
+
 ## 2026-08-27 — V4 safety-only 15-epoch OOD notebook
 
 Notebook 04 introduces a versioned experiment contract rather than altering the

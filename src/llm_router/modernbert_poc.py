@@ -80,6 +80,9 @@ def train_modernbert_hybrid_poc(
     dataset_balanced_sampling: bool = False,
     device: str | None = None,
     progress_callback: Callable[[dict[str, float | int | bool]], None] | None = None,
+    step_progress_callback: (
+        Callable[[dict[str, float | int | bool]], None] | None
+    ) = None,
 ) -> ModernBERTHybridPOCResult:
     """Train safety estimates while using the oracle only as an auxiliary task.
 
@@ -87,7 +90,10 @@ def train_modernbert_hybrid_poc(
     safety; ``panel.latency`` must contain the deterministic analytical proxy.
     Dataset-balanced sampling gives every dataset equal expected draw probability
     and recomputes class weights under that distribution. ``progress_callback``
-    receives one structured dictionary after every epoch for notebook logging.
+    receives one structured dictionary after every epoch. The optional
+    ``step_progress_callback`` receives the current mini-batch loss after every
+    optimizer step, which lets notebooks show live training progress without
+    changing checkpoint selection.
     """
 
     if head_learning_rate is None:
@@ -276,7 +282,7 @@ def train_modernbert_hybrid_poc(
         train_safety = 0.0
         train_oracle_auxiliary = 0.0
         train_examples = 0
-        for indices, encoded in train_loader:
+        for step_in_epoch, (indices, encoded) in enumerate(train_loader, start=1):
             optimizer.zero_grad(set_to_none=True)
             with _autocast(device, compute_dtype):
                 loss, parts = compute_loss(indices, encoded)
@@ -299,6 +305,25 @@ def train_modernbert_hybrid_poc(
                 indices
             )
             train_examples += len(indices)
+            if step_progress_callback is not None:
+                step_progress_callback(
+                    {
+                        "epoch": epoch,
+                        "epochs": epochs,
+                        "step_in_epoch": step_in_epoch,
+                        "steps_per_epoch": len(train_loader),
+                        "global_step": (epoch - 1) * len(train_loader) + step_in_epoch,
+                        "total_steps": epochs * len(train_loader),
+                        "batch_examples": len(indices),
+                        "step_total_loss": float(loss.detach()),
+                        "step_safety_loss": float(parts["safety"].detach()),
+                        "step_oracle_auxiliary_loss": float(
+                            parts["oracle_auxiliary"].detach()
+                        ),
+                        "running_train_total_loss": train_total / train_examples,
+                        "step_was_skipped": step_was_skipped,
+                    }
+                )
 
         train_seconds = time.perf_counter() - epoch_started
         model.eval()

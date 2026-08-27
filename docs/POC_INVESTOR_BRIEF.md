@@ -78,10 +78,11 @@ evidence. The complete decision memo is
 ## What v4 now tests
 
 Notebook 04 is the new, unrun investor-facing experiment. It trains only the
-deployed safety objective for all 15 epochs, restores the minimum-validation-loss
-checkpoint, and defaults to holding out complete datasets. The oracle code stays
-compatible but has coefficient zero. For example, safety loss 0.223 plus an
-oracle diagnostic 0.477 still yields v4 training loss 0.223.
+deployed safety objective for all five epochs, prints loss after every optimizer
+mini-batch, restores the minimum-validation-loss checkpoint, and defaults to
+holding out complete datasets. The oracle code stays compatible but has
+coefficient zero. For example, safety loss 0.223 plus an oracle diagnostic
+0.477 still yields v4 training loss 0.223.
 
 Its OOD dashboard shows the retained learning curve, the validation
 routing/savings frontier, quality retention versus routing for each unseen

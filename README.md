@@ -7,7 +7,7 @@ trains
 [`nomic-ai/modernbert-embed-base`](https://huggingface.co/nomic-ai/modernbert-embed-base)
 with lightweight LoRA adapters to estimate whether a faster candidate can
 preserve the quality of a strong fallback for each prompt. V4 uses only the
-class-balanced replacement-safety loss, trains rank-4 LoRA for all 15 epochs,
+class-balanced replacement-safety loss, trains rank-4 LoRA for all five epochs,
 and restores the epoch with the lowest validation safety loss. The oracle head
 and loss implementation remain present for compatibility, but their coefficient
 is exactly zero. A deterministic analytical estimator selects the lowest-latency
@@ -36,7 +36,8 @@ uses the fastest eligible alternative. Otherwise it safely uses the fallback.
 Technically, ModernBERT predicts two separate fallback-relative safety
 probabilities, one for each non-fallback Qwen tier. The selector combines those
 probabilities with analytical latency estimates. V4 trains one safety-only setup,
-restores the best of 15 validation checkpoints, freezes one stable threshold
+prints the active loss after every optimizer mini-batch, restores the best of
+five validation checkpoints, freezes one stable threshold
 region, and then opens the sealed test exactly once. The test is successful only if
 conservative quality, subgroup, harm, calibration, threshold-stability, and
 latency-overhead gates all pass.
@@ -137,13 +138,14 @@ V4 freezes these training changes:
 | Active loss | safety BCE only | Directly predicts fallback-relative safety |
 | Oracle coefficient | 0.0 | Oracle code exists but supplies zero gradient |
 | LoRA rank / alpha | 4 / 8 | Uses the winning v3 capacity setup |
-| Epochs | 15 | Every epoch runs; early stopping is disabled |
+| Epochs | 5 | Every epoch runs; early stopping is disabled |
+| Training log | every optimizer mini-batch | Shows live step and running-average safety loss |
 | Checkpoint | minimum validation safety loss | Later epochs cannot overwrite a better earlier model |
 | Default split | dataset-OOD seed 42 | Tests transfer to unseen tasks |
 
-For example, if validation safety loss is lowest at epoch 7 and rises from
-0.205 at epoch 7 to 0.219 at epoch 15, the exported router uses epoch 7 even
-though the training loop completed all 15 epochs.
+For example, if validation safety loss is lowest at epoch 3 and rises from
+0.205 at epoch 3 to 0.219 at epoch 5, the exported router uses epoch 3 even
+though the training loop completed all five epochs.
 
 ## Routing logic
 
@@ -245,9 +247,8 @@ unprofitable.
 
 The router is trained as a safety judge, not as an answer generator. For every
 faster candidate, it learns whether choosing that candidate would preserve the
-fallback's recorded quality. A separate training-only oracle teaches the shared
-representation which safe choice would have been fastest, but that oracle is
-never available when routing a new prompt.
+fallback's recorded quality. Notebook 03 historically tested a separate
+training-only oracle, but v4 keeps it inactive and learns only this safety task.
 
 For example, if the Qwen2.5-7B fallback scores 1 and Qwen2.5-1.5B scores 0, the
 1.5B tier receives an unsafe label of 0. If both score 1, it receives a safe
@@ -476,11 +477,19 @@ variance and more repeated draws from the 200-prompt dataset, which is why it is
 an ablation selected on validation rather than an unconditional replacement.
 
 The LoRA adapter uses learning rate $10^{-4}$ while the randomly initialized
-heads use $2\times10^{-4}$. V4 runs all 15 epochs with early stopping disabled,
+heads use $2\times10^{-4}$. V4 runs all five epochs with early stopping disabled,
 then restores the checkpoint with the minimum validation safety loss. For
-example, if epochs 7 and 15 have validation losses 0.181 and 0.196, the exported
-router uses epoch 7 even though training completed epoch 15. Historical notebooks
+example, if epochs 3 and 5 have validation losses 0.181 and 0.196, the exported
+router uses epoch 3 even though training completed epoch 5. Historical notebooks
 and the command-line defaults retain their earlier epoch and patience settings.
+
+During each v4 optimizer mini-batch, the notebook prints the current total loss,
+active safety loss, and running training-loss average. Since the oracle
+coefficient is zero, total loss and safety loss are numerically equal. For
+example, a line may report
+`step=12/65 loss=0.384210 safety=0.384210 running=0.417832`. Validation loss is
+still computed once after the epoch, so
+noisy individual steps do not select the checkpoint.
 
 After checkpoint selection, each candidate receives a Platt scaler. Validation
 rows use out-of-fold calibrated probabilities during threshold selection, so an
@@ -634,7 +643,7 @@ The immutable run IDs are:
 | `qwen25_v4_dataset_ood_seed_43` | unseen-dataset stress test | 43 |
 | `qwen25_v4_dataset_ood_seed_44` | unseen-dataset stress test | 44 |
 
-Only `RUN_ID` changes between v4 Colab sessions. The safety-only loss, 15-epoch
+Only `RUN_ID` changes between v4 Colab sessions. The safety-only loss, five-epoch
 schedule, candidate facts, threshold grid, confidence gates, and analytical scenario
 remain fixed, including the scenario identity date `2026-08-21`. The candidate quality
 evidence tag also freezes detail-repository revisions, published evaluation run
@@ -675,7 +684,8 @@ the three Qwen datasets or the ModernBERT router can be used.
 4. Confirm the displayed correctness audit has only binary outcomes and one row
    for every task/model/metric combination. Any incomplete or ambiguous panel
    fails before router training.
-5. Let the safety-only router complete all 15 epochs. Confirm that the retained
+5. Let the safety-only router complete all five epochs while checking that every
+   optimizer mini-batch prints its step loss. Confirm that the retained
    checkpoint is the epoch with minimum validation safety loss, then inspect the
    validation threshold frontier and measured ModernBERT p50/p95 versus break-even
    overhead.
@@ -692,8 +702,9 @@ The notebook downloads three pinned Open LLM Leaderboard detail repositories,
 aligns their 37 non-overlapping task files, deterministically keeps at most 300
 prompts per task, proves completion-length leakage is absent, audits prompt-content
 groups, runs validation-only sensitivity scenarios, trains and calibrates
-ModernBERT with epoch-level logs for all 15 epochs, and restores the best
-validation-safety checkpoint. It freezes one setup with a validation safety margin and
+ModernBERT with step-level training logs and epoch-level validation for all five
+epochs, and restores the best validation-safety checkpoint. It freezes one setup
+with a validation safety margin and
 threshold-stability rule, opens the sealed test once, and exports a
 reconstructable artifact plus scored evidence. It then measures ModernBERT only
 and launches a demo whose candidate latency remains analytical. Notebook 04 is
@@ -747,8 +758,9 @@ The report directory contains:
   allocation/harm;
 - `investor_ood_dataset_summary.csv`: the exact held-out-domain values behind
   the OOD outcome panel;
-- `v4_training_contract.json`: loss coefficients, 15-epoch schedule, selected
-  checkpoint rule, and confirmation that the oracle remains inactive;
+- `v4_training_contract.json`: loss coefficients, five-epoch schedule,
+  per-mini-batch logging behavior, selected checkpoint rule, and confirmation
+  that the oracle remains inactive;
 - `validation_sensitivity.csv`: validation-only oracle headroom across analytical
   hardware and output-length assumptions;
 - `test_router_overhead_sensitivity.csv`: the frozen test policy under several

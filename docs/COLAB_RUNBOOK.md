@@ -14,7 +14,8 @@ already cloned `develop`, rerunning the setup cell switches that checkout before
 imports. A missing helper is reported as a repository/source mismatch rather
 than a generic Python import failure.
 
-V4 uses only the deployed safety loss, runs all 15 epochs, and restores the
+V4 uses only the deployed safety loss, runs all five epochs, prints the active
+loss after every optimizer mini-batch, and restores the
 checkpoint with minimum validation safety loss. The oracle head and loss remain
 present for compatibility, with coefficient zero. Run and download one ZIP at
 a time:
@@ -108,7 +109,7 @@ prompt for all three candidates.
 
 Every v4 run trains the rank-4 safety-only setup. It keeps the same calibration,
 gate values, threshold grid, and requirement for two adjacent feasible
-thresholds. Training always completes 15 epochs because early stopping is
+thresholds. Training always completes five epochs because early stopping is
 disabled; export restores the epoch with the lowest validation safety loss.
 Only `RUN_ID` changes the split mode and seed.
 
@@ -137,8 +138,10 @@ Before closing Colab:
 - inspect the published metric used by every task;
 - confirm the ZIP name matches `RUN_ID`;
 - inspect every explicit validation and sealed-test failure reason;
-- confirm `v4_training_contract.json` reports 15 completed epochs, no early
-  stopping, oracle coefficient 0, and the retained validation-best epoch;
+- confirm every training mini-batch printed `loss`, `safety`, and `running`;
+- confirm `v4_training_contract.json` reports five completed epochs, no early
+  stopping, oracle coefficient 0, per-step logging, and the retained
+  validation-best epoch;
 - inspect `investor_ood_dashboard.png` and its underlying
   `investor_ood_dataset_summary.csv`;
 - compare ModernBERT p50 and p95 with break-even;

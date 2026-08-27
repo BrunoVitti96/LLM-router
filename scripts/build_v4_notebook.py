@@ -69,7 +69,7 @@ $$
 
 The oracle head and oracle-loss implementation remain present for artifact and
 code compatibility, but their coefficient is exactly zero, so they contribute
-no training gradient. V4 trains rank-4 LoRA for all 15 epochs and restores the
+no training gradient. V4 trains rank-4 LoRA for all five epochs and restores the
 checkpoint with the lowest validation safety loss.
 
 | Tier | Candidate | Exact parameters | Quality evidence |
@@ -92,7 +92,7 @@ cells[find_cell(cells, "## 2. Freeze the run")]["source"] = source_lines(
 ## 2. Freeze the v4 run and published-evidence contracts
 
 Change only `RUN_ID` between v4 experiments. Every seed reuses the same pinned
-detail-dataset revisions, evaluation runs, safety-only loss, 15-epoch schedule,
+detail-dataset revisions, evaluation runs, safety-only loss, five-epoch schedule,
 checkpoint rule, calibration, threshold grid, and quality gates.
 
 `random` asks prompt-level feasibility. `dataset_ood` holds out complete tasks
@@ -122,7 +122,7 @@ SPLIT_MODE, SEED = RUN_SPECS[RUN_ID]
 )
 config_source = config_source.replace(
     "EPOCHS = 8\nMINIMUM_EPOCHS = 2\nEARLY_STOPPING_PATIENCE = 2",
-    "EPOCHS = 15\nMINIMUM_EPOCHS = 15\nEARLY_STOPPING_PATIENCE = None",
+    "EPOCHS = 5\nMINIMUM_EPOCHS = 5\nEARLY_STOPPING_PATIENCE = None",
 )
 config_source = replace_between(
     config_source,
@@ -137,20 +137,21 @@ config_source = replace_between(
     },
 }
 V4_TRAINING_CONTRACT = {
-    "version": "v4-safety-only-15-epoch",
+    "version": "v4-safety-only-5-epoch-step-logging",
     "loss": "class-balanced fallback-relative safety BCE",
     "safety_loss_weight": 1.0,
     "oracle_head_present": True,
     "oracle_auxiliary_weight": 0.0,
     "epochs": EPOCHS,
     "early_stopping": False,
-    "checkpoint_rule": "minimum validation safety loss across all 15 epochs",
+    "training_loss_logging": "every optimizer mini-batch",
+    "checkpoint_rule": "minimum validation safety loss across all five epochs",
     "lora_rank": 4,
     "lora_alpha": 8,
 }
 assert tuple(SETUP_SPECS) == ("safety_only_r4",)
 assert SETUP_SPECS["safety_only_r4"]["oracle_auxiliary_weight"] == 0.0
-assert EPOCHS == MINIMUM_EPOCHS == 15
+assert EPOCHS == MINIMUM_EPOCHS == 5
 assert EARLY_STOPPING_PATIENCE is None
 
 ''',
@@ -230,17 +231,18 @@ $2.33[-\log(0.8)]\approx0.52$. The oracle contribution is zero regardless of
 its diagnostic value.
 
 Each candidate receives a Platt scaler. Threshold search uses out-of-fold
-validation probabilities. Training runs all 15 epochs, and the model restored
+validation probabilities. Training runs all five epochs, and the model restored
 for calibration is the epoch with minimum validation safety loss.
 """
 )
 
 cells[find_cell(cells, "## 8. Train every declared")]["source"] = source_lines(
     """
-## 8. Train the safety-only router for all 15 epochs
+## 8. Train the safety-only router for all five epochs
 
 V4 trains one rank-4 setup. Early stopping is disabled so every run completes
-15 epochs. After the last epoch, the training function restores the checkpoint
+five epochs. Every optimizer mini-batch prints its active loss immediately.
+After the last epoch, the training function restores the checkpoint
 with the lowest validation safety loss; the sealed test is still unopened.
 
 The oracle head remains in the model and artifact schema, while its coefficient
@@ -250,6 +252,30 @@ stays exactly `0.0`.
 
 training_index = find_cell(cells, "def make_epoch_logger")
 training_source = "".join(cells[training_index]["source"])
+training_source = training_source.replace(
+    "def make_epoch_logger(setup_name):\n",
+    '''def make_step_logger(setup_name):
+    def report(row):
+        print(
+            f"[{setup_name}] epoch={int(row['epoch'])}/{int(row['epochs'])} "
+            f"step={int(row['step_in_epoch'])}/{int(row['steps_per_epoch'])} "
+            f"global_step={int(row['global_step'])}/{int(row['total_steps'])} "
+            f"loss={row['step_total_loss']:.6f} "
+            f"safety={row['step_safety_loss']:.6f} "
+            f"running={row['running_train_total_loss']:.6f}",
+            flush=True,
+        )
+    return report
+
+
+def make_epoch_logger(setup_name):
+''',
+)
+training_source = training_source.replace(
+    "        progress_callback=make_epoch_logger(setup_name),\n",
+    "        progress_callback=make_epoch_logger(setup_name),\n"
+    "        step_progress_callback=make_step_logger(setup_name),\n",
+)
 training_source = training_source.replace(
     '    trainings[setup_name] = training\n    log_stage(',
     '    assert training.epochs_completed == EPOCHS\n'
@@ -382,7 +408,7 @@ axes[0, 0].scatter(
     zorder=5,
 )
 axes[0, 0].set(
-    title="1. Fifteen-epoch learning curve",
+    title="1. Five-epoch learning curve",
     xlabel="Epoch",
     ylabel="Class-balanced BCE",
 )
@@ -519,7 +545,7 @@ cells[export_markdown_index]["source"] = source_lines(
     """
 ## 14. Export the reconstructable v4 artifact
 
-The ZIP contains the pinned Qwen evidence, safety-only 15-epoch contract,
+The ZIP contains the pinned Qwen evidence, safety-only five-epoch contract,
 training history, retained checkpoint, calibration, threshold frontier,
 sealed-test decisions, OOD investor dashboard, ModernBERT adapter and heads,
 analytical scenario, and router-only timing diagnostics.
@@ -571,7 +597,8 @@ cells[checklist_index]["source"] = source_lines(
 
 Before an investor claim, confirm:
 
-- all 15 epochs completed and `best_epoch` is the minimum validation safety loss;
+- all five epochs completed and `best_epoch` is the minimum validation safety loss;
+- every optimizer mini-batch printed its step loss during training;
 - `oracle_auxiliary_weight=0.0` and the oracle head is present only for compatibility;
 - the ZIP contains evidence, training, calibration, threshold, decision, timing,
   and OOD dashboard artifacts;
@@ -619,7 +646,8 @@ cells.append(interactive_code)
 notebook["metadata"]["v4_contract"] = {
     "loss": "safety-only",
     "oracle_auxiliary_weight": 0.0,
-    "epochs": 15,
+    "epochs": 5,
+    "training_loss_logging": "every optimizer mini-batch",
     "checkpoint_rule": "minimum validation safety loss",
     "default_split": "dataset_ood",
 }

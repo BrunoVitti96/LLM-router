@@ -45,14 +45,16 @@ of proven production savings.
 ## 4 — What v4 changes
 
 Notebook 04 is a new, unrun experiment contract. Validation in notebook 03
-favored the direct safety loss, so v4 trains only that objective for all 15
-epochs. It restores the epoch with the lowest validation safety loss. The
+favored the direct safety loss, so v4 trains only that objective for all five
+epochs. It prints the active loss for every optimizer mini-batch and restores
+the epoch with the lowest validation safety loss. The
 oracle head and loss remain in the code for artifact compatibility, but their
 coefficient is zero and they cannot affect training.
 
 Numerically, if safety loss is 0.223 and the oracle diagnostic is 0.477, v4
-optimizes $0.223+0\times0.477=0.223$. If epoch 7 reaches validation loss 0.181
-and epoch 15 ends at 0.196, the exported router uses epoch 7.
+optimizes $0.223+0\times0.477=0.223$. If epoch 3 reaches validation loss 0.181
+and epoch 5 ends at 0.196, the exported router uses epoch 3. A noisy step loss
+does not select the checkpoint; validation is compared after each epoch.
 
 V4 defaults to a dataset-OOD split: complete tasks are held out from training.
 That is the investor-relevant question—does routing work on a domain it has not

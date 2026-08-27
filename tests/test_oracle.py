@@ -129,6 +129,7 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
         validation_datasets=("b",),
         test_datasets=("c",),
     )
+    step_rows = []
     result = modernbert_poc.train_modernbert_hybrid_poc(
         panel,
         split,
@@ -136,6 +137,7 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
         batch_size=2,
         dataset_balanced_sampling=True,
         device="cpu",
+        step_progress_callback=step_rows.append,
     )
     assert result.safety_probabilities.shape == panel.score.shape
     assert result.raw_safety_probabilities.shape == panel.score.shape
@@ -162,3 +164,11 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
     assert result.input_diagnostics["examples"] == len(panel.examples)
     assert result.router_input_lengths.shape == (len(panel.examples),)
     assert result.router_was_truncated.shape == (len(panel.examples),)
+    assert len(step_rows) == 2
+    assert [row["step_in_epoch"] for row in step_rows] == [1, 2]
+    assert [row["global_step"] for row in step_rows] == [1, 2]
+    assert all(row["epochs"] == 1 for row in step_rows)
+    assert all(row["steps_per_epoch"] == 2 for row in step_rows)
+    assert all(row["step_total_loss"] >= 0 for row in step_rows)
+    assert all(row["step_safety_loss"] >= 0 for row in step_rows)
+    assert all(row["running_train_total_loss"] >= 0 for row in step_rows)
