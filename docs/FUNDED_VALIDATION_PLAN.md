@@ -9,28 +9,33 @@ weak generalization result is reported rather than optimized away.
 
 ## Technical milestones and exit criteria
 
-### Milestone 1 — Reproducible random-split feasibility
+### Milestone 1 — Dataset-OOD stress test
 
-Run `qwen25_random_seed_42`, `qwen25_random_seed_43`, and
-`qwen25_random_seed_44` with the same three
-setups, loss, calibration, threshold grid, and schema-v5 gates. Publish every
+Run `qwen25_v4_dataset_ood_seed_42`, `qwen25_v4_dataset_ood_seed_43`, and
+`qwen25_v4_dataset_ood_seed_44` as separate artifacts. Entire datasets must
+remain disjoint. Every run uses the same rank-4 safety-only loss, all 15 epochs,
+validation-best checkpoint, calibration, threshold grid, and gates. Publish every
 artifact and a cross-seed table. The shared sampled Open LLM Leaderboard evidence
-must keep one fingerprint across all seeds. Do not change the seed-42 test after
-observing it. Exit evidence includes activation rate, quality-retention LCB, routed safety
+must keep one fingerprint across all seeds. Exit evidence includes activation
+rate, quality-retention LCB, routed safety
 precision LCB, harm UCL, macro and guarded retention, conservative savings, and
-feasible threshold-block size for all three seeds.
+feasible threshold-block size for all three seeds, plus the OOD dashboard.
 
-Example: if two seeds route 12% but one routes 0%, the conclusion is “feasible
-but unstable,” not an average 8% routing claim.
-
-### Milestone 2 — Dataset-OOD stress test
-
-Run `qwen25_dataset_ood_seed_42`, `qwen25_dataset_ood_seed_43`, and
-`qwen25_dataset_ood_seed_44` as separate artifacts. Entire datasets must remain
-disjoint. If the router fails
-closed on OOD while random splits pass, reposition the product as a domain-tuned
+If the router fails closed on OOD, reposition the product as a domain-tuned
 router and test customer-specific adaptation rather than claiming universal
 generalization.
+
+Example: if aggregate OOD retention is 99% but one held-out dataset retains only
+94% while routing 40% of its prompts, the domain chart must expose that failure;
+the 99% aggregate must not be presented alone.
+
+### Milestone 2 — Reproducible random-split feasibility
+
+Run `qwen25_v4_random_seed_42`, `qwen25_v4_random_seed_43`, and
+`qwen25_v4_random_seed_44` under that same v4 contract. Do not mix notebook-03
+unversioned artifacts into the v4 cross-seed table. For example, if two seeds
+route 12% but one routes 0%, the conclusion is “feasible but unstable,” not an
+average 8% routing claim.
 
 ### Milestone 3 — Router-only target-hardware economics
 

@@ -8,6 +8,90 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-08-27 — V4 safety-only 15-epoch OOD notebook
+
+Notebook 04 introduces a versioned experiment contract rather than altering the
+executed notebook-03 evidence. In plain language, the router now practices only
+the yes/no safety decision it uses in production, completes all 15 training
+epochs, and keeps the epoch that performed best on validation. The old oracle
+coach remains visible for compatibility but has no vote in learning.
+
+Technically, the single enabled setup is `safety_only_r4`, with LoRA rank 4,
+`oracle_auxiliary_weight=0.0`, `EPOCHS=15`, `MINIMUM_EPOCHS=15`, and
+`EARLY_STOPPING_PATIENCE=None`. The checkpoint rule remains minimum validation
+loss. The `oracle_choices` labels, oracle head, `model_oracle_loss`, and exported
+diagnostic fields remain present, but multiplication by zero blocks their
+gradient contribution. For example, safety loss 0.223 and oracle diagnostic
+0.477 yield $0.223+0\times0.477=0.223$.
+
+The new run IDs are `qwen25_v4_{random,dataset_ood}_seed_{42,43,44}`; the default
+is `qwen25_v4_dataset_ood_seed_42`. Versioning prevents later results from being
+presented as unchanged continuations of the v3 three-setup, eight-epoch contract.
+The notebook is output-free and no v4 result is claimed in this change.
+
+For investor review, notebook 04 adds a four-panel OOD dashboard: training and
+validation safety loss with the retained epoch; validation routed fraction and
+conservative savings across thresholds; per-held-out-dataset quality retention
+versus routed fraction; and model allocation with harmful routes. It exports the
+dashboard PNG, the underlying dataset CSV, and `v4_training_contract.json`.
+The final notebook cell launches the interactive Gradio prompt router so a user
+can type a prompt and inspect the selected model, probabilities, analytical
+latency, and fallback behavior.
+
+Documentation now recommends notebook 04, explains the zero-coefficient oracle
+precisely, provides a v4 Colab order, and shortens the investor memo into a
+didactic presentation. `scripts/build_v4_notebook.py` deterministically builds
+the notebook from the v3 workflow while clearing execution state, and notebook
+contract tests protect the 15-epoch schedule, inactive oracle, OOD exports, and
+final interactive cell. Routing thresholds, analytical candidate facts,
+evidence revisions, calibration, and sealed-test gates are otherwise unchanged.
+
+## 2026-08-27 — Notebook-03 seed-42 result and investor documentation
+
+The README and investor documents now report the completed Qwen-tier random
+seed-42 run instead of treating notebook 02 as the latest evidence. A new
+[`docs/INVESTOR_READINESS_MEMO.md`](docs/INVESTOR_READINESS_MEMO.md) separates a
+fundable validation story from an unsupported production-savings claim. The
+shorter investor brief was updated to match it.
+
+In plain language, the router found a promising aggregate result but did not
+pass every safety check. It routed 636 of 1,726 test prompts to smaller tiers,
+gained 40 answers, lost 32, and ended eight answers ahead of fallback. Modeled
+savings remained 28.24% at the conservative 20 ms overhead. The run still
+failed because performance was uneven across datasets.
+
+Technically, validation selected `safety_only_r4` at threshold 0.870 with a
+feasible block of 19 thresholds. The sealed-test quality-retention point
+estimate was 101.08% and its one-sided 95% lower bound was 99.19%. The harm UCL
+was 2.468%, routed-safety-precision LCB was 93.34%, and the macro-dataset
+retention LCB missed its 98% gate. `bbh_object_counting` supplied +10 net answers
+while the whole test supplied +8, demonstrating the task-mix problem.
+
+The documentation now also records two limitations exposed by the run. First,
+64.26% of router inputs were truncated at 512 tokens; truncated test prompts
+were -2 net answers while non-truncated prompts were +10. Second, the 100-prompt
+guarded-dataset rule matched zero test datasets and therefore returned its
+neutral value. The macro gate still prevented activation, but a new versioned
+study needs an achievable non-vacuous subgroup contract.
+
+The loss explanation now distinguishes setting
+`oracle_auxiliary_weight=0` from deleting the oracle head. Seed-42 validation
+favored safety-only training, but removing the oracle variants before the
+remaining seeds would change the frozen comparison after seeing a sealed test.
+The documented options are to finish the existing ablation plan or declare seed
+42 exploratory and start a new versioned safety-only study.
+
+The README also warns that raw total loss is not comparable across safety-only
+and hybrid objectives. The approximately 0.208 safety-only validation loss omits
+the oracle term included in the approximately 0.603 hybrid loss; setup selection
+therefore relies on validation policy metrics rather than the smaller raw number.
+It now describes the executed notebook outputs as an inspectable working copy
+and the reconstructable ZIP as the authoritative run record.
+
+No Python, notebook source, routing behavior, loss coefficient, threshold,
+candidate profile, evidence record, or evaluation gate changed in this
+documentation-only update.
+
 ## 2026-08-26 — Unsuffixed IFEval strict metric accepted explicitly
 
 The first authenticated notebook-03 evidence download reached IFEval and then

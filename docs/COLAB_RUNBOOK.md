@@ -1,8 +1,9 @@
-# Colab v3 published-Qwen-evidence runbook
+# Colab v4 safety-only OOD runbook
 
 ## Plain-language run order
 
-Open `notebooks/03_train_modernbert_qwen_tiers_poc.ipynb` in a fresh GPU Colab.
+Open `notebooks/04_train_modernbert_qwen_tiers_safety_only_v4.ipynb` in a fresh
+GPU Colab.
 It downloads published per-example prompts, Qwen answers, and correctness scores,
 then trains ModernBERT. It does **not** download or run Qwen model weights.
 
@@ -13,14 +14,22 @@ already cloned `develop`, rerunning the setup cell switches that checkout before
 imports. A missing helper is reported as a repository/source mismatch rather
 than a generic Python import failure.
 
-Run and download one ZIP at a time:
+V4 uses only the deployed safety loss, runs all 15 epochs, and restores the
+checkpoint with minimum validation safety loss. The oracle head and loss remain
+present for compatibility, with coefficient zero. Run and download one ZIP at
+a time:
 
-1. `qwen25_random_seed_42`
-2. `qwen25_random_seed_43`
-3. `qwen25_random_seed_44`
-4. `qwen25_dataset_ood_seed_42`
-5. `qwen25_dataset_ood_seed_43`
-6. `qwen25_dataset_ood_seed_44`
+1. `qwen25_v4_dataset_ood_seed_42`
+2. `qwen25_v4_dataset_ood_seed_43`
+3. `qwen25_v4_dataset_ood_seed_44`
+4. `qwen25_v4_random_seed_42`
+5. `qwen25_v4_random_seed_43`
+6. `qwen25_v4_random_seed_44`
+
+The OOD runs come first because investors need to see whether the router works
+on complete tasks absent from training. For example, a 30% saving on a random
+split does not establish domain generalization if an OOD run falls below the
+98% macro-quality-retention gate.
 
 ## One-time Hugging Face access
 
@@ -95,12 +104,18 @@ evaluation run timestamps, exclusions, cap, and sampling seed are hashed into
 `EVIDENCE_TAG`. Every retained key must have the same document hash and rendered
 prompt for all three candidates.
 
-## Frozen router and timing contracts
+## Frozen v4 router and timing contracts
 
-Every run compares rank-4 hybrid, rank-4 safety-only, and rank-8 hybrid setups.
-It keeps the same calibration, gate values, threshold grid, eight maximum epochs,
-minimum epoch 2, patience 2, and requirement for two adjacent feasible
-thresholds. Only `RUN_ID` changes the split mode and seed.
+Every v4 run trains the rank-4 safety-only setup. It keeps the same calibration,
+gate values, threshold grid, and requirement for two adjacent feasible
+thresholds. Training always completes 15 epochs because early stopping is
+disabled; export restores the epoch with the lowest validation safety loss.
+Only `RUN_ID` changes the split mode and seed.
+
+The exact optimization objective is
+$\mathcal L_{v4}=\mathcal L_{safety}+0\mathcal L_{oracle}$. For example, safety
+loss 0.223 and oracle diagnostic 0.477 still produce training loss 0.223. The
+oracle diagnostic can be inspected but cannot update ModernBERT or either head.
 
 Candidate latency remains analytical. The scenario uses BF16 because the
 published quality evidence does not establish that 4-bit quantization preserves
@@ -122,9 +137,18 @@ Before closing Colab:
 - inspect the published metric used by every task;
 - confirm the ZIP name matches `RUN_ID`;
 - inspect every explicit validation and sealed-test failure reason;
+- confirm `v4_training_contract.json` reports 15 completed epochs, no early
+  stopping, oracle coefficient 0, and the retained validation-best epoch;
+- inspect `investor_ood_dashboard.png` and its underlying
+  `investor_ood_dataset_summary.csv`;
 - compare ModernBERT p50 and p95 with break-even;
+- run the final notebook cell and verify a typed prompt returns a selected model;
 - download the ZIP; and
 - keep random and dataset-OOD artifacts separate.
 
 A fallback-only result shows that the guard worked. It does not show that learned
 prompt-level routing works.
+
+Notebook 03 and its unversioned `qwen25_*` run IDs remain the historical v3
+three-setup ablation. Do not combine those artifacts with v4 as if the loss and
+epoch contracts were unchanged.

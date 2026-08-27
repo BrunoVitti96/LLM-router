@@ -81,14 +81,11 @@ def test_executed_hybrid_poc_notebook_is_didactic_and_syntactically_valid():
         ast.parse(source)
 
 
-def test_qwen_tier_v3_notebook_is_clean_didactic_and_syntactically_valid():
+def test_qwen_tier_v3_notebook_is_didactic_and_syntactically_valid():
     path = Path("notebooks/03_train_modernbert_qwen_tiers_poc.ipynb")
     notebook = json.loads(path.read_text(encoding="utf-8"))
     assert notebook["nbformat"] == 4
     code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
-    assert all(cell["execution_count"] is None for cell in code_cells)
-    assert all(not cell["outputs"] for cell in code_cells)
-
     full_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
     required_lessons = (
         "Qwen2.5-1.5B",
@@ -152,6 +149,68 @@ def test_qwen_tier_v3_notebook_is_clean_didactic_and_syntactically_valid():
     assert "BitsAndBytesConfig" not in full_text
     assert ".generate(" not in full_text
     assert "pipeline(" not in full_text
+
+    for cell in code_cells:
+        source = "".join(cell["source"])
+        if source.lstrip().startswith("%"):
+            continue
+        ast.parse(source)
+
+
+def test_qwen_tier_v4_notebook_is_clean_safety_only_and_investor_ready():
+    path = Path("notebooks/04_train_modernbert_qwen_tiers_safety_only_v4.ipynb")
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    assert notebook["nbformat"] == 4
+    code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
+    assert all(cell["execution_count"] is None for cell in code_cells)
+    assert all(not cell["outputs"] for cell in code_cells)
+
+    full_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+    required_contract = (
+        "V4 safety-only ModernBERT router",
+        "Qwen2.5-1.5B",
+        "Qwen2.5-3B",
+        "Qwen2.5-7B",
+        "qwen25_v4_random_seed_42",
+        "qwen25_v4_dataset_ood_seed_42",
+        'RUN_ID = "qwen25_v4_dataset_ood_seed_42"',
+        "EPOCHS = 15",
+        "MINIMUM_EPOCHS = 15",
+        "EARLY_STOPPING_PATIENCE = None",
+        '"oracle_head_present": True',
+        '"oracle_auxiliary_weight": 0.0',
+        "oracle_logits",
+        "minimum validation safety loss",
+        "assert training.epochs_completed == EPOCHS",
+        "assert not training.stopped_early",
+        "select_validation_policy",
+        "POLICY FROZEN",
+        "run_public_benchmark(",
+        "single_run_passed",
+        "Investor OOD dashboard",
+        "Fifteen-epoch learning curve",
+        "Validation routing-savings frontier",
+        "Held-out-domain safety map",
+        "Selected-tier allocation and harm",
+        "investor_ood_dashboard.png",
+        "investor_ood_dataset_summary.csv",
+        "v4_training_contract.json",
+        "create_gradio_demo",
+        "demo.launch",
+        "Interactive investor showcase",
+    )
+    assert all(item in full_text for item in required_contract)
+    assert '"hybrid_r4": {' not in full_text
+    assert '"hybrid_r8": {' not in full_text
+    assert full_text.count("run_public_benchmark(") == 1
+    assert full_text.count("%pip install") == 1
+    assert "AutoModelForCausalLM" not in full_text
+    assert ".generate(" not in full_text
+
+    assert notebook["cells"][-1]["cell_type"] == "code"
+    final_source = "".join(notebook["cells"][-1]["source"])
+    assert "create_gradio_demo" in final_source
+    assert "demo.launch" in final_source
 
     for cell in code_cells:
         source = "".join(cell["source"])

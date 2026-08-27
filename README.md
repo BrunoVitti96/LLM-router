@@ -1,20 +1,22 @@
 # Calibrated ModernBERT router for three Qwen capacity tiers
 
-The recommended v3 proof of concept loads reproducible, published per-example
+The recommended v4 proof of concept loads reproducible, published per-example
 quality evidence for three separated Qwen2.5 tiers—1.54B, 3.09B, and 7.61B
 parameters—then
 trains
 [`nomic-ai/modernbert-embed-base`](https://huggingface.co/nomic-ai/modernbert-embed-base)
 with lightweight LoRA adapters to estimate whether a faster candidate can
-preserve the quality of a strong fallback for each prompt. The notebook compares
-loss and adapter-capacity setups, including a rank-8 capacity ablation,
-before a deterministic analytical estimator selects the lowest-latency candidate
-predicted safe.
+preserve the quality of a strong fallback for each prompt. V4 uses only the
+class-balanced replacement-safety loss, trains rank-4 LoRA for all 15 epochs,
+and restores the epoch with the lowest validation safety loss. The oracle head
+and loss implementation remain present for compatibility, but their coefficient
+is exactly zero. A deterministic analytical estimator selects the lowest-latency
+candidate predicted safe.
 
 ModernBERT does **not** predict latency and does **not** directly predict the
 final model. Candidate latency comes from model size, generation architecture,
 precision, prompt size, and explicit hardware assumptions. No candidate LLM is
-loaded or timed in v3. Quality comes from pinned Hugging Face Open LLM
+loaded or timed in v4. Quality comes from pinned Hugging Face Open LLM
 Leaderboard detail datasets; published runtime is neither a routing target nor
 used by the selector.
 
@@ -33,14 +35,13 @@ uses the fastest eligible alternative. Otherwise it safely uses the fallback.
 
 Technically, ModernBERT predicts two separate fallback-relative safety
 probabilities, one for each non-fallback Qwen tier. The selector combines those
-probabilities with analytical latency estimates. The notebook compares three
-training setups using validation outcomes only, freezes one setup and one stable
-threshold region, and then opens the sealed test exactly once. The test is
-successful only if
+probabilities with analytical latency estimates. V4 trains one safety-only setup,
+restores the best of 15 validation checkpoints, freezes one stable threshold
+region, and then opens the sealed test exactly once. The test is successful only if
 conservative quality, subgroup, harm, calibration, threshold-stability, and
 latency-overhead gates all pass.
 
-The v3 notebook freezes a six-run router plan: random and dataset-OOD modes at
+The v4 notebook freezes a new six-run router plan: random and dataset-OOD modes at
 seeds 42, 43, and 44. It deterministically keeps at most 300 aligned prompts from
 each of 37 non-overlapping published tasks: at most 11,100 prompts and 33,300
 prompt-model outcomes, reused across split seeds.
@@ -57,35 +58,92 @@ test gate. If faster routing saves 50 ms per prompt before routing cost and the
 router costs 4 ms, net analytical savings are $50-4=46$ ms per prompt. The
 policy must satisfy both the quality and latency requirements.
 
-The v3 setup comparison asks two concrete questions. Comparing rank-4 hybrid
-training against rank-4 safety-only training tests whether the training-only
-oracle helps. Comparing rank-4 against rank-8 hybrid training tests adapter
-capacity. These are validation experiments; the test set is not used to pick the
-winner. Notebook 02 retains the earlier dataset-balanced ablation.
+Notebook 03's seed-42 validation comparison motivated v4: rank-4 safety-only
+training beat rank-4 and rank-8 hybrid training on calibration, safe-opportunity
+recall, and conservative analytical savings. V4 treats that result as exploratory
+model-selection evidence and starts a new versioned safety-only study rather than
+silently changing the remaining v3 runs after a sealed test was observed.
 
-## Current evidence: notebook 02 seed 44 did not pass
+## Current evidence: notebook 03 seed 42 is promising but did not pass
 
-The latest completed run in
-[`02_train_modernbert_hybrid_poc.ipynb`](notebooks/02_train_modernbert_hybrid_poc.ipynb)
-used random seed 44 and the old Fin-R1/Qwen3-8B panel. It routed 623 of 2,805
-sealed-test prompts (22.21%), gained 43 correct answers, lost 52, and ended nine
-answers behind fallback. Its quality-retention point estimate was 99.55%, while
-the one-sided 95% lower bound was 98.73%, above the 98% aggregate gate.
+The latest completed run is the random-split seed-42 execution saved in
+[`03_train_modernbert_qwen_tiers_poc.ipynb`](notebooks/03_train_modernbert_qwen_tiers_poc.ipynb).
+It aligned 8,632 prompts across 37 published tasks, producing 25,896 recorded
+prompt-model outcomes. The split contained 5,179 training, 1,727 validation,
+and 1,726 sealed-test prompts. This is one feasibility run, not multi-seed or
+dataset-OOD evidence.
 
-That aggregate result was not enough. Routed-safety precision was 91.65% with an
-89.65% lower bound, below the 90% gate. The guarded worst-dataset retention lower
-bound was 88.36%, below its 90% floor, and the macro-dataset quality lower bound
-also failed. FinQA lost nine net answers and MMLU-Pro lost seven, while MBPP gained
-17. Numerically, $43-52=-9$, so the run is a negative safety result even though
-analytical latency savings remained positive.
+Validation selected `safety_only_r4` at threshold `0.870`. Its contiguous
+feasible threshold block contained 19 grid values. The selected setup routed
+38.97% of validation prompts, had a 100.03% aggregate quality-retention lower
+bound and a 99.23% macro-dataset lower bound, and estimated 30.11% analytical
+latency savings at the conservative 20 ms router overhead. The two hybrid
+setups also activated, but both offered less conservative savings and safe-
+opportunity recall, so validation did not support the oracle auxiliary loss in
+this run.
 
-ModernBERT end-to-end overhead was 42.55 ms at p50 and 67.23 ms at p95. The
-frozen policy's break-even overhead was 52.14 ms, so median economics remained
-positive but tail economics did not. At the frozen 4 ms and 20 ms assumptions,
-analytical savings were 2.52% and 1.68%. This is why v3 tests more separated
-candidate tiers: the old parameter ratio was $7.0/8.2=85.4\%$, leaving a narrow
-latency margin, while the new small tier is $1.54/7.61=20.2\%$ of the strong
-tier's parameter count.
+On the sealed test, the router sent 636 of 1,726 prompts (36.85%) to smaller
+tiers: 499 to Qwen2.5-1.5B and 137 to Qwen2.5-3B. It gained 40 correct answers,
+lost 32, and finished eight answers ahead of the Qwen2.5-7B fallback. In count
+form, the fallback answered 740 prompts correctly and the router answered 748,
+so point-estimate retention was $748/740=101.08\%$. The one-sided 95% lower
+bound was 99.19%, above the 98% aggregate test gate.
+
+The run nevertheless has `single_run_passed=False` because the sealed-test
+macro-dataset quality-retention lower bound missed its 98% gate. Task mix was
+material: `bbh_object_counting` contributed +10 net answers, more than the
+run's total +8. Without that task, the remaining test prompts were two answers
+behind fallback. The harm rate was $32/1{,}726=1.85\%$, with a 2.468% one-sided
+upper bound. That technically passed the 2.5% gate but left only 0.032
+percentage points of margin.
+
+The configured guarded-dataset statistic did not add evidence in this run.
+It requires at least 100 sealed-test prompts in a dataset, but no seed-42 test
+dataset reached 100, so `guarded_dataset_count=0` and the implementation returned
+the neutral value 1.0. The macro gate still caught the cross-task weakness. An
+achievable non-vacuous subgroup contract must be versioned before it is used in
+a new confirmatory study; it must not be retroactively changed and applied to
+the already-opened seed-42 test.
+
+Analytical latency savings were 28.90% at the frozen 4 ms overhead and 28.24%
+at 20 ms. ModernBERT end-to-end overhead on the Colab Tesla T4 was 46.66 ms at
+p50 and 63.00 ms at p95, both below the frozen policy's analytical break-even
+overhead of 711.49 ms. These are promising feasibility economics, not measured
+Qwen serving savings: no Qwen candidate was loaded or timed.
+
+Input length is another important limitation. The training runs reported a
+64.26% truncation rate at 512 ModernBERT tokens. In the sealed test, truncated
+prompts contributed eight gains and ten losses, or -2 net answers, while
+non-truncated prompts contributed 32 gains and 22 losses, or +10. Truncation is
+therefore a plausible contributor to the failed cross-task result and must be
+tested rather than treated as a display-only diagnostic.
+
+## V4 experiment status: built but not yet executed
+
+[`04_train_modernbert_qwen_tiers_safety_only_v4.ipynb`](notebooks/04_train_modernbert_qwen_tiers_safety_only_v4.ipynb)
+is the new recommended notebook. Its default run is
+`qwen25_v4_dataset_ood_seed_42`, which holds out complete published tasks and
+creates an investor-oriented OOD dashboard after the sealed test opens.
+
+V4 has no results yet. Notebook 03 seed 42 remains the latest completed evidence
+and must not be relabeled as a v4 result. The v4 notebook is intentionally clean:
+all execution counts and outputs are empty until it is run in Colab with the
+pinned gated evidence.
+
+V4 freezes these training changes:
+
+| Contract item | V4 value | Practical meaning |
+|---|---:|---|
+| Active loss | safety BCE only | Directly predicts fallback-relative safety |
+| Oracle coefficient | 0.0 | Oracle code exists but supplies zero gradient |
+| LoRA rank / alpha | 4 / 8 | Uses the winning v3 capacity setup |
+| Epochs | 15 | Every epoch runs; early stopping is disabled |
+| Checkpoint | minimum validation safety loss | Later epochs cannot overwrite a better earlier model |
+| Default split | dataset-OOD seed 42 | Tests transfer to unseen tasks |
+
+For example, if validation safety loss is lowest at epoch 7 and rises from
+0.205 at epoch 7 to 0.219 at epoch 15, the exported router uses epoch 7 even
+though the training loop completed all 15 epochs.
 
 ## Routing logic
 
@@ -97,7 +155,7 @@ flowchart LR
     P --> T["Analytical latency estimator"]
     F["Parameters, precision, AR/diffusion facts"] --> T
     H["Hardware and output-length assumptions"] --> T
-    C --> V["Validation-only setup comparison"]
+    C --> V["Validation-only threshold frontier"]
     V --> FZ["Freeze one setup and stable threshold block"]
     FZ --> E{"Calibrated safety ≥ threshold?"}
     T --> E
@@ -112,7 +170,8 @@ flowchart LR
 ```
 
 Only the calibrated safety head and analytical latency estimator are deployed.
-The hindsight-oracle head is training-only.
+The hindsight-oracle head is retained but inactive in v4: its coefficient is
+zero during training and it is not consulted at inference.
 
 ## Deployment objective
 
@@ -248,7 +307,7 @@ $4\times0.223=0.892$. This prevents the model from obtaining a deceptively low
 loss by predicting "unsafe" for nearly every prompt when safe replacements are
 rare.
 
-### Training-only oracle loss
+### Inactive compatibility oracle loss
 
 The hindsight oracle can see recorded outcomes and chooses the fastest model
 that preserves fallback-relative quality:
@@ -293,29 +352,104 @@ be unsafe and the oracle would choose 7B despite its higher latency. Assigning
 probability to 1.5B would then incur the quality-risk penalty, illustrating that
 preserving quality takes priority over saving latency.
 
-### Complete training loss
+V4 keeps this function, the oracle head, and its diagnostics so old artifacts
+remain readable, but sets its coefficient to zero. The value may still be
+reported as an inactive diagnostic; it contributes no gradient and cannot
+change the learned router.
 
-The complete objective is:
+### Current v4 training loss
+
+Notebook 03 historically used the hybrid objective
+$\mathcal L_{safety}+0.25\mathcal L_{oracle}$. The recommended v4 objective is:
 
 $$
-\boxed{\mathcal L_{train}=\mathcal L_{safety}
-+0.25\mathcal L_{oracle}}.
+\boxed{\mathcal L_{v4}=1.0\mathcal L_{safety}
++0.0\mathcal L_{oracle}=\mathcal L_{safety}}.
 $$
 
 Continuing the safe-prompt example and assuming its candidate class weight is
-$w_m=1$, the safety loss is $0.223$ and:
+$w_m=1$, the safety loss is $0.223$. Even if the inactive oracle diagnostic is
+$0.477$:
 
 $$
-\mathcal L_{train}=0.223+0.25(0.477)=0.34225\approx0.342.
+\mathcal L_{v4}=0.223+0.0(0.477)=0.223.
 $$
 
-The safety head is the deployed prediction. The oracle head only shapes the
-shared ModernBERT representation during training and is not consulted by the
-production selector. The loss is therefore a differentiable training proxy for
-the real objective: minimize latency subject to preserving fallback quality.
+The safety head is the deployed prediction. The oracle head neither shapes the
+shared ModernBERT representation in v4 nor participates in production
+selection. Latency awareness remains in the deterministic selector: among
+candidates whose calibrated safety probability clears the frozen threshold, it
+chooses the analytically fastest one.
 
-The Colab notebook treats the oracle coefficient and LoRA rank as predeclared
-validation ablations:
+Safety loss alone can support the product objective, but it is not sufficient
+evidence by itself. It learns eligibility—“which candidates preserve fallback
+quality?”—while the selector supplies the speed ranking. For example, with a
+threshold of 0.87, safety probabilities 0.91 for 1.5B and 0.95 for 3B make both
+eligible; analytical latencies 0.40 s and 0.65 s select 1.5B. If the probabilities
+are 0.82 and 0.92, only 3B is eligible. This succeeds only if probabilities stay
+calibrated under domain shift and the analytical latency order matches deployment,
+which is why OOD quality bounds and measured target-hardware economics remain
+required before scaling.
+
+### What seed 42 says about the oracle auxiliary loss
+
+In plain language, the first loss is the direct job the deployed router must do:
+for each smaller candidate, answer yes or no to "will this candidate preserve
+fallback quality?" The oracle loss is optional coaching about which complete
+model decision would have been fastest in hindsight. Seed 42 says that the
+coaching did not help: the rank-4 safety-only setup produced the best validation
+policy.
+
+Technically, setting the oracle coefficient to zero changes
+
+$$
+\mathcal L_{train}=\mathcal L_{safety}+0.25\mathcal L_{oracle}
+$$
+
+to
+
+$$
+\boxed{\mathcal L_{train}=\mathcal L_{safety}}.
+$$
+
+This does not remove latency awareness from deployment. Analytical latency still
+filters candidates and chooses the fastest eligible model after the safety head
+has produced calibrated probabilities. It only stops oracle gradients from
+altering the shared ModernBERT representation during training.
+
+The seed-42 validation comparison favored `safety_only_r4`: conservative
+analytical savings were 30.11%, compared with 19.51% for `hybrid_r4` and 24.85%
+for `hybrid_r8`. Safe-opportunity recall was 41.51%, compared with 23.75% and
+33.91%. Its calibrated Brier score was also lowest at 0.13119 versus 0.13245 and
+0.13220. These are validation comparisons; the sealed test was opened only for
+the selected safety-only setup.
+
+Do not compare the displayed total-loss magnitudes across these setups as if
+they shared one scale. Seed 42 reported validation total loss near 0.208 for
+`safety_only_r4` and 0.603 for the hybrid setups, but the hybrid number contains
+an additional non-negative oracle term. A lower safety-only total is partly a
+consequence of adding zero oracle loss, not evidence that it is three times more
+accurate. The evidence that favors safety-only is the validation policy table—
+calibration, quality bounds, routing, recall, and conservative savings—not the
+raw cross-objective total-loss comparison.
+
+For a numerical loss example, suppose the 1.5B candidate is safe and receives
+probability 0.8, with class weight 1. Its safety BCE is
+$-\log(0.8)=0.223$. If the auxiliary oracle loss is 0.48, hybrid training uses
+$0.223+0.25(0.48)=0.343$. Safety-only training uses 0.223. The extra 0.120 is
+useful only if oracle supervision improves the deployed safety probabilities;
+seed 42 found no such validation benefit.
+
+V4 follows the versioned safety-only path. Notebook 03 seed 42 is exploratory
+evidence that motivated the change; notebook 04 is a separate experiment
+contract and its results must not be described as unchanged confirmations of
+the v3 plan. The recommendation still distinguishes disabling from deleting. Using
+`oracle_auxiliary_weight=0` retires the oracle from optimization. Deleting the
+oracle head and artifact fields is a separate compatibility change and provides
+almost no inference saving because that head is already excluded from the
+deployed selector.
+
+Notebook 03 used these predeclared validation ablations:
 
 | Setup | LoRA rank | Oracle coefficient | Question answered |
 |---|---:|---:|---|
@@ -326,6 +460,10 @@ validation ablations:
 All enabled setups use the same train/validation/test split. Their setup leaderboard,
 calibration diagnostics, threshold frontiers, and training curves use validation
 only. The selected setup alone is evaluated on sealed-test outcomes.
+
+Notebook 04 intentionally has one enabled setup, `safety_only_r4`. It preserves
+the setup-comparison table with one row for artifact-schema compatibility, not
+as a claim that v4 repeated the three-way ablation.
 
 Notebook 02's historical dataset-balanced setup assigns every training row from dataset $d$ weight
 $1/N_d$ and samples with replacement. After normalization, each of $D$ datasets
@@ -338,11 +476,11 @@ variance and more repeated draws from the 200-prompt dataset, which is why it is
 an ablation selected on validation rather than an unconditional replacement.
 
 The LoRA adapter uses learning rate $10^{-4}$ while the randomly initialized
-heads use $2\times10^{-4}$. Notebook training can run for at most eight epochs,
-but stops
-after two consecutive non-improving validation epochs once at least two epochs
-have completed. The command-line default is five maximum epochs with the same
-minimum-epoch and patience settings.
+heads use $2\times10^{-4}$. V4 runs all 15 epochs with early stopping disabled,
+then restores the checkpoint with the minimum validation safety loss. For
+example, if epochs 7 and 15 have validation losses 0.181 and 0.196, the exported
+router uses epoch 7 even though training completed epoch 15. Historical notebooks
+and the command-line defaults retain their earlier epoch and patience settings.
 
 After checkpoint selection, each candidate receives a Platt scaler. Validation
 rows use out-of-fold calibrated probabilities during threshold selection, so an
@@ -472,14 +610,14 @@ indentation remain significant because changing them can alter code semantics.
 Thus, two source records with different IDs but the same normalized prompt must
 remain in one split. For example, two MMLU rows with identical rendered question
 and choices cannot enter train and test separately. This experiment asks whether
-prompt content contains enough signal for safe replacement and remains the
-default notebook mode.
+prompt content contains enough signal for safe replacement. It is the secondary
+v4 feasibility comparison, not the investor-facing default.
 
 ### 2. Dataset-OOD stress test
 
 Entire datasets are disjoint across train, validation, and test. This asks
-whether the learned relationship generalizes to unseen domains. Run it as a
-separate artifact only after random feasibility succeeds.
+whether the learned relationship generalizes to unseen domains and is the v4
+notebook default because it is the stronger investor-facing stress test.
 
 Repeat both modes with at least seeds 42, 43, and 44 before making a stability
 claim. A random pass with an OOD failure proves feasibility, not cross-domain
@@ -489,25 +627,29 @@ The immutable run IDs are:
 
 | Run ID | Split claim | Seed |
 |---|---|---:|
-| `qwen25_random_seed_42` | prompt-level feasibility | 42 |
-| `qwen25_random_seed_43` | prompt-level feasibility | 43 |
-| `qwen25_random_seed_44` | prompt-level feasibility | 44 |
-| `qwen25_dataset_ood_seed_42` | unseen-dataset stress test | 42 |
-| `qwen25_dataset_ood_seed_43` | unseen-dataset stress test | 43 |
-| `qwen25_dataset_ood_seed_44` | unseen-dataset stress test | 44 |
+| `qwen25_v4_random_seed_42` | prompt-level feasibility | 42 |
+| `qwen25_v4_random_seed_43` | prompt-level feasibility | 43 |
+| `qwen25_v4_random_seed_44` | prompt-level feasibility | 44 |
+| `qwen25_v4_dataset_ood_seed_42` | unseen-dataset stress test | 42 |
+| `qwen25_v4_dataset_ood_seed_43` | unseen-dataset stress test | 43 |
+| `qwen25_v4_dataset_ood_seed_44` | unseen-dataset stress test | 44 |
 
-Only `RUN_ID` changes between Colab sessions. The loss, three setup ablations,
-candidate facts, threshold grid, confidence gates, and analytical scenario remain
-fixed, including the v3 scenario identity date `2026-08-21`. The candidate quality
+Only `RUN_ID` changes between v4 Colab sessions. The safety-only loss, 15-epoch
+schedule, candidate facts, threshold grid, confidence gates, and analytical scenario
+remain fixed, including the scenario identity date `2026-08-21`. The candidate quality
 evidence tag also freezes detail-repository revisions, published evaluation run
 IDs, task exclusions, the per-task cap, and deterministic sampling seed. See the
 [`Colab runbook`](docs/COLAB_RUNBOOK.md).
 
+The unversioned `qwen25_*` IDs belong to notebook 03 and remain historical.
+Keeping `v4` in the new IDs prevents the changed loss and training schedule from
+being mistaken for a continuation of that earlier contract.
+
 ## Train entirely in Google Colab
 
-[Open notebook 03 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/poc/notebooks/03_train_modernbert_qwen_tiers_poc.ipynb)
+[Open notebook 04 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/poc/notebooks/04_train_modernbert_qwen_tiers_safety_only_v4.ipynb)
 
-Notebook 03 and its companion Python source currently live on the `poc` branch.
+Notebook 04 and its companion Python source currently live on the `poc` branch.
 The setup cell explicitly checks out that branch and verifies that
 `src/llm_router/qwen_evidence.py` exists before importing anything. This avoids
 mixing a new notebook with older `develop` code. For example, a notebook that
@@ -515,7 +657,8 @@ expects `qwen_evidence.py` but installs a branch without it fails before any of
 the three Qwen datasets or the ModernBERT router can be used.
 
 1. Select **Runtime → Change runtime type → GPU**.
-2. Leave `RUN_ID = "qwen25_random_seed_42"` for the first run and execute every
+2. Leave `RUN_ID = "qwen25_v4_dataset_ood_seed_42"` for the first investor-facing
+   OOD run and execute every
    cell from top to bottom. Accept access to the three auto-gated Open LLM
    Leaderboard detail datasets and add a read token named `HF_TOKEN` to Colab
    secrets. In Colab, click the key icon in the left sidebar, create the secret
@@ -532,35 +675,44 @@ the three Qwen datasets or the ModernBERT router can be used.
 4. Confirm the displayed correctness audit has only binary outcomes and one row
    for every task/model/metric combination. Any incomplete or ambiguous panel
    fails before router training.
-5. Let all three router setups finish, then inspect the validation-only setup
-   comparison, threshold frontier, and measured
-   ModernBERT p50/p95 versus break-even overhead.
-6. Use the Gradio share link to demonstrate safety probability, fallback use,
-   analytical candidate latency, and estimated savings.
-7. Download the generated `qwen25_random_seed_42` ZIP.
-8. Repeat random seeds 43 and 44. Run the three `qwen25_dataset_ood_seed_*`
-   artifacts separately only after random feasibility is understood.
+5. Let the safety-only router complete all 15 epochs. Confirm that the retained
+   checkpoint is the epoch with minimum validation safety loss, then inspect the
+   validation threshold frontier and measured ModernBERT p50/p95 versus break-even
+   overhead.
+6. Inspect the four-panel OOD investor dashboard: learning curve, validation
+   routing/savings frontier, held-out-domain quality retention versus routing,
+   and model allocation with harmful routes.
+7. Run the final cell and use its Gradio share link to demonstrate safety
+   probability, fallback use, analytical candidate latency, and estimated savings.
+8. Download the generated `qwen25_v4_dataset_ood_seed_42` ZIP. Repeat OOD seeds
+   43 and 44, then run the three versioned random-split artifacts as a separate
+   feasibility comparison.
 
 The notebook downloads three pinned Open LLM Leaderboard detail repositories,
 aligns their 37 non-overlapping task files, deterministically keeps at most 300
 prompts per task, proves completion-length leakage is absent, audits prompt-content
 groups, runs validation-only sensitivity scenarios, trains and calibrates
-ModernBERT with epoch-level logs and early stopping, and compares the declared
-setups on validation. It freezes one setup with a validation safety margin and
+ModernBERT with epoch-level logs for all 15 epochs, and restores the best
+validation-safety checkpoint. It freezes one setup with a validation safety margin and
 threshold-stability rule, opens the sealed test once, and exports a
 reconstructable artifact plus scored evidence. It then measures ModernBERT only
-and launches a demo whose candidate latency remains analytical. The canonical v3
-notebook is intentionally stored without execution output; the ZIP is the run
-record.
+and launches a demo whose candidate latency remains analytical. Notebook 04 is
+deliberately output-free in Git and has no results yet. The current working copy
+of notebook 03 contains executed seed-42 exploratory outputs for inspection.
+Embedded notebook output is not a substitute for the reconstructable ZIP, which
+remains the authoritative run record and should be preserved separately.
 
-The current investor-facing summary and honest limitations are in
-[`docs/POC_INVESTOR_BRIEF.md`](docs/POC_INVESTOR_BRIEF.md). The gated use of
-funding is described in
+The current investor-facing decision memo and honest limitations are in
+[`docs/INVESTOR_READINESS_MEMO.md`](docs/INVESTOR_READINESS_MEMO.md). The shorter
+project brief remains in
+[`docs/POC_INVESTOR_BRIEF.md`](docs/POC_INVESTOR_BRIEF.md). The gated use of funding
+is described in
 [`docs/FUNDED_VALIDATION_PLAN.md`](docs/FUNDED_VALIDATION_PLAN.md).
 
 Each epoch log reports train and validation loss, whether it became the best
 checkpoint, wall-clock seconds, training examples per second, cumulative skipped
-mixed-precision steps, and whether early stopping will fire. For example, if an
+mixed-precision steps, and the legacy early-stop flag—which remains false in v4.
+For example, if an
 epoch processes 540 pilot training examples in 30 seconds, the log reports
 $540/30=18$ training examples per second.
 
@@ -590,6 +742,13 @@ The report directory contains:
   by split and candidate;
 - `per_dataset_metrics.csv`: strategy quality, savings, harm bounds, and routing
   behavior for every sealed-test dataset;
+- `investor_ood_dashboard.png`: four investor-readable OOD views covering the
+  learning curve, validation frontier, held-out-domain outcomes, and model
+  allocation/harm;
+- `investor_ood_dataset_summary.csv`: the exact held-out-domain values behind
+  the OOD outcome panel;
+- `v4_training_contract.json`: loss coefficients, 15-epoch schedule, selected
+  checkpoint rule, and confirmation that the oracle remains inactive;
 - `validation_sensitivity.csv`: validation-only oracle headroom across analytical
   hardware and output-length assumptions;
 - `test_router_overhead_sensitivity.csv`: the frozen test policy under several
@@ -628,8 +787,10 @@ repository commit, Python and package versions, GPU, and CUDA runtime.
 ## Historical LLMRouterBench command-line equivalents
 
 The CLI commands below reproduce notebook 02's public-benchmark line of work.
-Notebook 03 is the canonical three-tier Qwen workflow because its pinned
-published-evidence ingestion step is intentionally explicit in the notebook.
+Notebook 04 is the canonical v4 three-tier Qwen workflow because its pinned
+published-evidence ingestion and safety-only training contract are intentionally
+explicit in the notebook. Notebook 03 remains the historical three-setup
+ablation and executed seed-42 evidence.
 
 Feasibility:
 
@@ -704,11 +865,15 @@ audits.md                                   # historical runs and design changes
 notebooks/
 ├── 01_train_modernbert_router.ipynb       # historical measured-latency run
 ├── 02_train_modernbert_hybrid_poc.ipynb   # executed historical 7B/8B run
-└── 03_train_modernbert_qwen_tiers_poc.ipynb # recommended three-tier Colab POC
+├── 03_train_modernbert_qwen_tiers_poc.ipynb # historical three-setup ablation
+└── 04_train_modernbert_qwen_tiers_safety_only_v4.ipynb # recommended v4 OOD POC
+
+scripts/
+└── build_v4_notebook.py        # deterministic output-free v4 notebook builder
 
 src/llm_router/
 ├── analytical_latency.py       # measurement-free latency equations
-├── experiment_plan.py          # immutable six-run study and setup menu
+├── experiment_plan.py          # historical CLI/notebook-02 schema-v5 presets
 ├── router_overhead.py          # ModernBERT-only target-hardware timing
 ├── hybrid_inference.py         # analytical selector and Gradio demo runtime
 ├── oracle.py                   # balanced safety and auxiliary oracle losses
@@ -720,7 +885,8 @@ src/llm_router/
 
 docs/
 ├── COLAB_RUNBOOK.md            # one-run-per-ZIP execution order
-├── POC_INVESTOR_BRIEF.md       # one-page evidence and limitations
+├── INVESTOR_READINESS_MEMO.md  # current investment case, evidence, and risks
+├── POC_INVESTOR_BRIEF.md       # short project brief
 └── FUNDED_VALIDATION_PLAN.md   # customers, milestones, and exit criteria
 ```
 

@@ -16,29 +16,29 @@ secondary customers. Low-volume, single-model teams are not the initial target.
 
 ## What the latest evidence actually says
 
-The latest completed notebook-02 run used random seed 44 and a narrow Fin-R1
-7.0B/Qwen3-8B 8.2B panel. It routed 623 of 2,805 sealed-test prompts (22.21%),
-gained 43 correct answers, lost 52, and ended nine answers behind fallback. Its
-aggregate quality-retention lower bound was 98.73%, but it failed three other
-predeclared gates: macro-dataset quality, routed safety precision, and guarded
-worst-dataset quality. Therefore `single_run_passed=False` is the correct result.
+The latest completed run is notebook 03's random seed 42 using Qwen2.5-1.5B,
+3B, and 7B. It evaluated 1,726 sealed-test prompts, routed 636 (36.85%) to a
+smaller tier, gained 40 correct answers, lost 32, and finished eight answers
+ahead of fallback. Aggregate quality retention was 101.08%, with a one-sided
+95% lower bound of 99.19%, above the 98% gate.
 
-The task mix explains why an attractive average would be misleading. MBPP gained
-17 net answers, while FinQA lost nine and MMLU-Pro lost seven. Numerically,
-$43-52=-9$. The router was useful on some code prompts and unsafe on several
-knowledge/reasoning groups.
+The run still has `single_run_passed=False`. Its macro-dataset quality-retention
+lower bound missed the predeclared 98% gate. `bbh_object_counting` contributed
++10 net answers, more than the complete run's +8, so the other tasks were -2
+without it. The harm-rate upper bound was 2.468%, only 0.032 percentage points
+inside its 2.5% ceiling.
 
-Economics were positive only around the median. Analytical savings were 2.52%
-at the frozen 4 ms router assumption and 1.68% at 20 ms. The frozen policy broke
-even at 52.14 ms. Measured ModernBERT end-to-end overhead was 42.55 ms at p50 and
-67.23 ms at p95, so p50 was viable while p95 was not.
+Analytical savings were 28.90% at the frozen 4 ms overhead and 28.24% at 20 ms.
+ModernBERT end-to-end overhead was 46.66 ms at p50 and 63.00 ms at p95, below
+the analytical break-even value of 711.49 ms. Candidate Qwen latency was not
+measured, so these are feasibility economics rather than production savings.
 
-## What v3 changes
+## What v3 demonstrated
 
-Notebook 03 replaces the old $7.0/8.2=85.4\%$ parameter ratio with three pinned
+Notebook 03 replaced the old $7.0/8.2=85.4\%$ parameter ratio with three pinned
 Qwen2.5 capacity tiers: 1.54B, 3.09B, and 7.61B. The small tier is only
-$1.54/7.61=20.2\%$ of the strong tier's parameter count, creating materially
-more analytical room for router overhead.
+$1.54/7.61=20.2\%$ of the strong tier's parameter count, which created materially
+more analytical room for router overhead in seed 42.
 
 V3 downloads pinned Open LLM Leaderboard per-example details for all three tiers;
 it never loads Qwen weights. After removing two overlapping GPQA variants, it
@@ -63,21 +63,36 @@ adjacent feasible thresholds, and exactly one sealed-test opening per run.
 ## Honest commercial position
 
 This is not yet a “we reduced production cost” story. It is a disciplined
-prototype that found a negative result, diagnosed why, and built a stronger test.
-The investable proposition is the evidence system and bounded validation plan:
-three random seeds, three dataset-OOD seeds, target-hardware router timing, and a
-design-partner pilot. V3 must be run before publishing any new savings claim.
+prototype with promising aggregate economics and an explicit cross-dataset
+failure. The investable proposition is the evidence system and bounded
+validation plan: three random seeds, three dataset-OOD seeds, target-hardware
+candidate timing, and a design-partner pilot.
 
-A defensible LinkedIn statement today is: “We built a calibrated router that
-failed closed when a narrow model panel was unsafe, and we are now testing a
-three-tier Qwen panel with a fivefold parameter span.” A claim that the product
-already saves a guaranteed percentage or dollar amount would exceed the evidence.
+A defensible statement today is: “Our first sealed three-tier run routed 36.9%
+of prompts to smaller models and estimated 28.2% analytical latency savings,
+while a predeclared macro-dataset safety gate prevented us from calling the run
+a pass.” A guaranteed percentage or dollar-saving claim would exceed the
+evidence. The complete decision memo is
+[`INVESTOR_READINESS_MEMO.md`](INVESTOR_READINESS_MEMO.md).
+
+## What v4 now tests
+
+Notebook 04 is the new, unrun investor-facing experiment. It trains only the
+deployed safety objective for all 15 epochs, restores the minimum-validation-loss
+checkpoint, and defaults to holding out complete datasets. The oracle code stays
+compatible but has coefficient zero. For example, safety loss 0.223 plus an
+oracle diagnostic 0.477 still yields v4 training loss 0.223.
+
+Its OOD dashboard shows the retained learning curve, the validation
+routing/savings frontier, quality retention versus routing for each unseen
+dataset, and model allocation with harmful routes. V4 results must come from
+the exported artifact; the clean notebook contains no claimed result.
 
 ## Fundable next step
 
-Funding should buy validation rather than optimism: ingest and audit the v3
-published evidence, publish all six run artifacts, measure ModernBERT p50/p95 on
-target hardware, expand beyond the capped public panel, and run a paid design partnership
-with aggregate quality audits. The milestone has three acceptable outcomes:
-general router, domain-specific router, or a negative result that safely stays
-on fallback.
+Funding should buy validation rather than optimism: preserve and verify the
+seed-42 artifact, complete the three versioned OOD and three random v4 runs,
+measure complete target-hardware serving economics, and run a paid design
+partnership with aggregate and per-domain quality audits. The milestone has
+three acceptable outcomes: general router, domain-specific router, or a
+negative result that safely stays on fallback.
