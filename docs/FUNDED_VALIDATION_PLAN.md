@@ -9,11 +9,26 @@ weak generalization result is reported rather than optimized away.
 
 ## Technical milestones and exit criteria
 
+### Milestone 0 — Isolate the input bottleneck
+
+Run notebook 05's `prefix_512`, `prefix_1024`, and `head_tail_1024` variants on
+the same dataset-OOD seed-42 split. Hold loss, rank-4 LoRA, labels, calibration,
+thresholds, and gates fixed. Validation chooses the representation; only that
+winner opens the sealed test. For a 1,600-token prompt, this compares discarding
+1,088 prefix-tail tokens with discarding 576 tokens or preserving both ends.
+
+Advance the winning representation only if it materially improves unseen-task
+validation, not merely training loss. If all three remain near the notebook-04
+ROC-AUC of 0.5467, the bottleneck is more likely labels/domain coverage or model
+capacity than truncation, and the next funded experiment should change one of
+those factors under a new versioned contract.
+
 ### Milestone 1 — Dataset-OOD stress test
 
-Run `qwen25_v4_dataset_ood_seed_42`, `qwen25_v4_dataset_ood_seed_43`, and
-`qwen25_v4_dataset_ood_seed_44` as separate artifacts. Entire datasets must
-remain disjoint. Every run uses the same rank-4 safety-only loss, all five
+Run `qwen25_v5_context_ood_seed_42`, `qwen25_v5_context_ood_seed_43`, and
+`qwen25_v5_context_ood_seed_44` as separate artifacts using the validation-
+selected representation. Entire datasets must remain disjoint. Every run uses
+the same rank-4 safety-only loss, all five
 epochs, per-mini-batch loss logging, validation-best checkpoint, calibration,
 threshold grid, and gates. Publish every
 artifact and a cross-seed table. The shared sampled Open LLM Leaderboard evidence
@@ -32,9 +47,9 @@ the 99% aggregate must not be presented alone.
 
 ### Milestone 2 — Reproducible random-split feasibility
 
-Run `qwen25_v4_random_seed_42`, `qwen25_v4_random_seed_43`, and
-`qwen25_v4_random_seed_44` under that same v4 contract. Do not mix notebook-03
-unversioned artifacts into the v4 cross-seed table. For example, if two seeds
+Run `qwen25_v5_context_random_seed_42`, `qwen25_v5_context_random_seed_43`, and
+`qwen25_v5_context_random_seed_44` under that same v5 contract. Do not mix
+notebook-03 or notebook-04 artifacts into the v5 cross-seed table. For example, if two seeds
 route 12% but one routes 0%, the conclusion is “feasible but unstable,” not an
 average 8% routing claim.
 

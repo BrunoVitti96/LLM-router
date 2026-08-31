@@ -74,6 +74,7 @@ def test_router_overhead_summary_keeps_candidate_latency_analytical():
     assert summary["end_to_end_ms"]["p50"] == pytest.approx(6.0)
     assert summary["model_only_ms"]["p50"] == pytest.approx(4.0)
     assert summary["candidate_latency_method"].startswith("analytical")
+    assert summary["input_truncation_strategy"] == "prefix"
     assert not summary["measurement_affects_frozen_policy"]
 
 
@@ -127,6 +128,7 @@ def test_demo_runtime_measures_router_but_keeps_candidate_latency_analytical():
         router_active=True,
         minimum_predicted_savings=0.02,
         max_input_tokens=512,
+        input_truncation_strategy="prefix",
         scenario=scenario,
         device="cpu",
     )

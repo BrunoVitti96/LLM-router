@@ -13,6 +13,7 @@ import torch
 from peft import PeftModel
 from transformers import AutoModel, AutoTokenizer
 
+from llm_router.input_representation import encode_router_texts
 from llm_router.utils.text import format_router_input
 
 from .modernbert_router import DecisionAlignedRouter
@@ -121,11 +122,14 @@ class ModernBERTRouterInference:
         if self.device.startswith("cuda"):
             torch.cuda.synchronize()
         started = time.perf_counter()
-        encoded = self.tokenizer(
+        encoded = encode_router_texts(
+            self.tokenizer,
             [f"classification: {text}"],
+            max_input_tokens=int(self.manifest["router_max_input_tokens"]),
+            truncation_strategy=self.manifest.get(
+                "router_input_truncation_strategy", "prefix"
+            ),
             padding=True,
-            truncation=True,
-            max_length=int(self.manifest["router_max_input_tokens"]),
             return_tensors="pt",
         ).to(self.device)
         autocast = (

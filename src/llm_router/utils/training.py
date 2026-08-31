@@ -17,6 +17,7 @@ from torch.utils.data import DataLoader
 from transformers import PreTrainedTokenizerBase, get_cosine_schedule_with_warmup
 
 from llm_router.config import RouterConfig
+from llm_router.input_representation import encode_router_texts
 from llm_router.models.modernbert_router import DecisionAlignedRouter
 from llm_router.utils.calibration import out_of_fold_platt
 from llm_router.utils.data import RouterData
@@ -73,11 +74,12 @@ def make_encoder(
 ) -> Callable:
     def encode_indices(indices: list[int] | np.ndarray) -> tuple[torch.Tensor, object]:
         normalized = [int(index) for index in indices]
-        encoded = tokenizer(
+        encoded = encode_router_texts(
+            tokenizer,
             [f"classification: {text[index]}" for index in normalized],
+            max_input_tokens=config.max_input_tokens,
+            truncation_strategy=config.input_truncation_strategy,
             padding=True,
-            truncation=True,
-            max_length=config.max_input_tokens,
             return_tensors="pt",
         )
         return torch.tensor(normalized, dtype=torch.long), encoded

@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 from llm_router.config import DEFAULT_CONFIG, EXPECTED_MODEL_REPOS, MODEL_NAMES
 
 
@@ -16,6 +18,8 @@ def test_contract_keeps_deployment_guard():
     assert contract["minimum_quality_retention"] == 0.98
     assert contract["quality_confidence"] == 0.95
     assert contract["minimum_predicted_speedup"] == 0.02
+    assert contract["router_max_input_tokens"] == 512
+    assert contract["router_input_truncation_strategy"] == "prefix"
     assert contract["policy_gates"] == {
         "validation_quality_margin": 0.01,
         "minimum_macro_quality_retention": 0.98,
@@ -30,3 +34,22 @@ def test_contract_keeps_deployment_guard():
         "calibrated overhead-inclusive validation routing"
     )
     assert "retention LCB" in contract["deployment_guard"]
+
+
+def test_config_accepts_v5_head_tail_budget_and_rejects_unknown_strategy():
+    v5_config = replace(
+        DEFAULT_CONFIG,
+        max_input_tokens=1024,
+        input_truncation_strategy="head_tail",
+    )
+    v5_config.validate()
+    contract = v5_config.contract("evidence", "gpu", "torch.float16")
+    assert contract["router_max_input_tokens"] == 1024
+    assert contract["router_input_truncation_strategy"] == "head_tail"
+
+    try:
+        replace(v5_config, input_truncation_strategy="middle").validate()
+    except AssertionError:
+        pass
+    else:
+        raise AssertionError("An unknown input truncation strategy must be rejected.")

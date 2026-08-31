@@ -8,6 +8,50 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-08-31 — V5 input-representation isolation after the v4 OOD failure
+
+The executed notebook-04 dataset-OOD seed-42 run reduced training loss from
+0.2220 to 0.2023, but validation loss stayed approximately flat at 0.2390,
+0.2414, 0.2360, 0.2408, and 0.2411; epoch 3 was retained. Validation ROC-AUC
+was 0.5467. In plain language, the router learned the training tasks without
+learning a dependable safety ranking for unseen tasks.
+
+The input audit provided a concrete first hypothesis: 64.26% of examples were
+truncated at 512 tokens, all 588 routed sealed-test prompts were truncated, and
+none of the 500 non-truncated prompts was routed. The 1.5B routes were +13 net;
+the 3B routes gained 28 answers and lost 35, or -7 net. Macro-quality and harm
+gates rejected the policy. This correlation does not establish causation, so a
+new version isolates representation before changing the loss or dataset.
+
+Notebook 05 compares `prefix_512`, `prefix_1024`, and `head_tail_1024` on the
+same split and labels. The first is the exact v4 input control, the second tests
+token budget, and the third preserves both prompt ends. For a 1,600-token input,
+they discard 1,088 tokens, 576 tail tokens, and 576 middle tokens respectively.
+All variants retain rank-4/alpha-8 LoRA, the class-balanced safety BCE, zero
+oracle coefficient, five complete epochs, validation-best checkpointing,
+calibration, thresholds, and safety gates. Validation selects one variant and
+only that variant opens the sealed test. Notebook 05 is output-free and no v5
+result is claimed by this change.
+
+The three variants request concurrent execution because the observed v4 run
+left GPU-memory headroom. Each uses batch size 4. A preflight requires at least
+14 GiB total and 80% free GPU memory; otherwise execution is sequential. Model
+construction is protected by a shared lock to reduce initialization spikes, and
+every optimizer step is printed with its variant name so three worker logs remain
+attributable. This check cannot guarantee speed or prevent all OOMs because
+the workers still share one GPU's compute and memory bandwidth; the documented
+recovery is a fresh runtime with parallel training disabled.
+
+Shared source now makes router tokenization an artifact-level contract.
+`RouterConfig` accepts a bounded token budget and `prefix` or `head_tail` strategy;
+training, calibration, overhead measurement, exported inference, and the Gradio
+runtime all call the same encoder. Old artifacts default to `prefix`. Training
+also accepts an optional initialization lock for safe notebook concurrency.
+Unit tests cover exact head-tail token selection, configuration/export defaults,
+notebook cleanliness and contracts, and backward-compatible runtime behavior.
+The README, Colab runbook, investor memo, short brief, and funded-validation plan
+now report the executed v4 failure and the unrun v5 hypothesis separately.
+
 ## 2026-08-27 — V4 reduced to five epochs with per-step loss logging
 
 Before any v4 result was produced, the notebook training schedule changed from

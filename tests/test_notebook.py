@@ -157,14 +157,11 @@ def test_qwen_tier_v3_notebook_is_didactic_and_syntactically_valid():
         ast.parse(source)
 
 
-def test_qwen_tier_v4_notebook_is_clean_safety_only_and_investor_ready():
+def test_qwen_tier_v4_notebook_is_safety_only_and_investor_ready():
     path = Path("notebooks/04_train_modernbert_qwen_tiers_safety_only_v4.ipynb")
     notebook = json.loads(path.read_text(encoding="utf-8"))
     assert notebook["nbformat"] == 4
     code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
-    assert all(cell["execution_count"] is None for cell in code_cells)
-    assert all(not cell["outputs"] for cell in code_cells)
-
     full_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
     required_contract = (
         "V4 safety-only ModernBERT router",
@@ -215,6 +212,56 @@ def test_qwen_tier_v4_notebook_is_clean_safety_only_and_investor_ready():
     final_source = "".join(notebook["cells"][-1]["source"])
     assert "create_gradio_demo" in final_source
     assert "demo.launch" in final_source
+
+    for cell in code_cells:
+        source = "".join(cell["source"])
+        if source.lstrip().startswith("%"):
+            continue
+        ast.parse(source)
+
+
+def test_qwen_tier_v5_notebook_is_clean_parallel_input_experiment():
+    path = Path("notebooks/05_train_modernbert_input_representation_ood_v5.ipynb")
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    assert notebook["nbformat"] == 4
+    assert "widgets" not in notebook["metadata"]
+    code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
+    assert all(cell["execution_count"] is None for cell in code_cells)
+    assert all(not cell["outputs"] for cell in code_cells)
+
+    full_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+    required_contract = (
+        "V5 ModernBERT input-representation OOD experiment",
+        'RUN_ID = "qwen25_v5_context_ood_seed_42"',
+        '"prefix_512": {',
+        '"prefix_1024": {',
+        '"head_tail_1024": {',
+        '"max_input_tokens": 512',
+        '"max_input_tokens": 1024',
+        '"input_truncation_strategy": "head_tail"',
+        "ThreadPoolExecutor",
+        "PARALLEL_TRAINING_REQUESTED = True",
+        "PARALLEL_TRAINING_ENABLED",
+        "PARALLEL_BATCH_SIZE = 4",
+        "STEP_LOG_EVERY = 1",
+        "initialization_lock=MODEL_INITIALIZATION_LOCK",
+        "minimum validation safety loss",
+        "input_representation_comparison.csv",
+        "parallel_training_facts.json",
+        "v5_input_representation_contract.json",
+        "Train versus OOD-validation safety loss",
+        "Does less truncation improve validation?",
+        "create_gradio_demo",
+        "demo.launch",
+    )
+    assert all(item in full_text for item in required_contract)
+    assert full_text.count("run_public_benchmark(") == 1
+    assert full_text.count("train_modernbert_hybrid_poc(") == 1
+    assert "AutoModelForCausalLM" not in full_text
+    assert ".generate(" not in full_text
+
+    assert notebook["cells"][-1]["cell_type"] == "code"
+    assert "demo.launch" in "".join(notebook["cells"][-1]["source"])
 
     for cell in code_cells:
         source = "".join(cell["source"])

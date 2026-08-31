@@ -16,22 +16,22 @@ secondary customers. Low-volume, single-model teams are not the initial target.
 
 ## What the latest evidence actually says
 
-The latest completed run is notebook 03's random seed 42 using Qwen2.5-1.5B,
-3B, and 7B. It evaluated 1,726 sealed-test prompts, routed 636 (36.85%) to a
-smaller tier, gained 40 correct answers, lost 32, and finished eight answers
-ahead of fallback. Aggregate quality retention was 101.08%, with a one-sided
-95% lower bound of 99.19%, above the 98% gate.
+The latest completed run is notebook 04's dataset-OOD seed 42. Training loss
+fell from 0.2220 to 0.2023, while validation loss was 0.2390, 0.2414, 0.2360,
+0.2408, and 0.2411. Epoch 3 was retained, but validation ROC-AUC was only
+0.5467. The model fit its training tasks without learning a reliable safety
+ranking for unseen tasks.
 
-The run still has `single_run_passed=False`. Its macro-dataset quality-retention
-lower bound missed the predeclared 98% gate. `bbh_object_counting` contributed
-+10 net answers, more than the complete run's +8, so the other tasks were -2
-without it. The harm-rate upper bound was 2.468%, only 0.032 percentage points
-inside its 2.5% ceiling.
+At 512 tokens, 64.26% of examples were truncated. Every one of the 588 routed
+test prompts was truncated, while none of the 500 non-truncated prompts was
+routed. The 1.5B routes gained 13 answers and lost none; the 3B routes gained 28
+but lost 35. The run failed macro-quality and harm-bound gates. This association
+does not prove truncation caused the failure, which is why v5 tests it directly.
 
-Analytical savings were 28.90% at the frozen 4 ms overhead and 28.24% at 20 ms.
-ModernBERT end-to-end overhead was 46.66 ms at p50 and 63.00 ms at p95, below
-the analytical break-even value of 711.49 ms. Candidate Qwen latency was not
-measured, so these are feasibility economics rather than production savings.
+Notebook 03's random seed 42 remains promising historical evidence: it routed
+36.85% of test prompts, estimated 28.24% analytical savings at 20 ms overhead,
+and ended eight answers ahead of fallback. It also failed its macro-dataset
+gate. Candidate Qwen latency was not measured in either run.
 
 ## What v3 demonstrated
 
@@ -68,31 +68,29 @@ failure. The investable proposition is the evidence system and bounded
 validation plan: three random seeds, three dataset-OOD seeds, target-hardware
 candidate timing, and a design-partner pilot.
 
-A defensible statement today is: “Our first sealed three-tier run routed 36.9%
-of prompts to smaller models and estimated 28.2% analytical latency savings,
-while a predeclared macro-dataset safety gate prevented us from calling the run
-a pass.” A guaranteed percentage or dollar-saving claim would exceed the
-evidence. The complete decision memo is
+A defensible statement today is: “A random-split run showed promising routing,
+but the first dataset-OOD run did not generalize; our safety gates blocked
+deployment and our next controlled test isolates lost prompt context.” A
+guaranteed percentage or dollar-saving claim would exceed the evidence. The complete decision memo is
 [`INVESTOR_READINESS_MEMO.md`](INVESTOR_READINESS_MEMO.md).
 
-## What v4 now tests
+## What v5 now tests
 
-Notebook 04 is the new, unrun investor-facing experiment. It trains only the
-deployed safety objective for all five epochs, prints loss after every optimizer
-mini-batch, restores the minimum-validation-loss checkpoint, and defaults to
-holding out complete datasets. The oracle code stays compatible but has
-coefficient zero. For example, safety loss 0.223 plus an oracle diagnostic
-0.477 still yields v4 training loss 0.223.
+Notebook 05 compares `prefix_512`, `prefix_1024`, and `head_tail_1024` while
+holding the safety-only loss, rank-4 LoRA, split, calibration, and gates fixed.
+For a 1,600-token input, the variants discard 1,088, 576, and 576 middle tokens,
+respectively. Validation selects one representation and only that winner opens
+the sealed test. The three variants request concurrent GPU execution with batch
+size 4 and fall back to sequential execution when the memory preflight fails.
 
-Its OOD dashboard shows the retained learning curve, the validation
-routing/savings frontier, quality retention versus routing for each unseen
-dataset, and model allocation with harmful routes. V4 results must come from
-the exported artifact; the clean notebook contains no claimed result.
+Its dashboard compares learning curves, truncation rate versus validation loss,
+validation routing versus savings, and the selected model's OOD domain outcomes.
+V5 is unrun; its clean notebook contains no claimed result.
 
 ## Fundable next step
 
-Funding should buy validation rather than optimism: preserve and verify the
-seed-42 artifact, complete the three versioned OOD and three random v4 runs,
+Funding should buy validation rather than optimism: run the controlled v5 input
+test, repeat the winning representation across OOD and random seeds,
 measure complete target-hardware serving economics, and run a paid design
 partnership with aggregate and per-domain quality audits. The milestone has
 three acceptable outcomes: general router, domain-specific router, or a

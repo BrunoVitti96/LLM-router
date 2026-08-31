@@ -26,6 +26,7 @@ from llm_router.analytical_latency import (
     estimate_latency_seconds,
 )
 from llm_router.config import RouterConfig
+from llm_router.input_representation import encode_router_texts
 from llm_router.models.modernbert_router import HybridModernBERTRouter
 from llm_router.public_benchmark import EconomicsScenario, ModelProfile
 
@@ -148,6 +149,7 @@ class HybridModernBERTRouterRuntime:
         max_input_tokens: int,
         scenario: EconomicsScenario,
         device: str,
+        input_truncation_strategy: str = "prefix",
     ) -> None:
         if scenario.latency_method != "analytical":
             raise ValueError("The hybrid demo requires analytical candidate latency.")
@@ -163,6 +165,7 @@ class HybridModernBERTRouterRuntime:
         self.router_active = bool(router_active)
         self.minimum_predicted_savings = float(minimum_predicted_savings)
         self.max_input_tokens = int(max_input_tokens)
+        self.input_truncation_strategy = input_truncation_strategy
         self.scenario = scenario
         self.device = device
         self.compute_dtype = (
@@ -199,6 +202,7 @@ class HybridModernBERTRouterRuntime:
             router_active=router_active,
             minimum_predicted_savings=minimum_predicted_savings,
             max_input_tokens=config.max_input_tokens,
+            input_truncation_strategy=config.input_truncation_strategy,
             scenario=scenario,
             device=device,
         )
@@ -251,6 +255,9 @@ class HybridModernBERTRouterRuntime:
             router_active=manifest["router_active"],
             minimum_predicted_savings=manifest["minimum_predicted_savings"],
             max_input_tokens=manifest["router_max_input_tokens"],
+            input_truncation_strategy=manifest.get(
+                "router_input_truncation_strategy", "prefix"
+            ),
             scenario=scenario,
             device=device,
         )
@@ -303,11 +310,12 @@ class HybridModernBERTRouterRuntime:
         if self.device.startswith("cuda"):
             torch.cuda.synchronize()
         started = time.perf_counter()
-        encoded = self.tokenizer(
+        encoded = encode_router_texts(
+            self.tokenizer,
             [text],
+            max_input_tokens=self.max_input_tokens,
+            truncation_strategy=self.input_truncation_strategy,
             padding=True,
-            truncation=True,
-            max_length=self.max_input_tokens,
             return_tensors="pt",
         ).to(self.device)
         context = (

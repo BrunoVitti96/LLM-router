@@ -1,157 +1,99 @@
-# Colab v4 safety-only OOD runbook
+# Colab v5 input-representation runbook
 
-## Plain-language run order
+## Goal
 
-Open `notebooks/04_train_modernbert_qwen_tiers_safety_only_v4.ipynb` in a fresh
-GPU Colab.
-It downloads published per-example prompts, Qwen answers, and correctness scores,
-then trains ModernBERT. It does **not** download or run Qwen model weights.
+Run `notebooks/05_train_modernbert_input_representation_ood_v5.ipynb` in a
+fresh GPU Colab. The notebook tests whether the 512-token prefix caused the weak
+notebook-04 OOD validation result. It downloads published Qwen prompts, answers,
+and correctness scores; it does not load Qwen model weights.
 
-The canonical notebook currently uses the repository's `poc` branch. Its first
-cell fetches and switches `/content/LLM_Router` to `poc`, installs that checkout,
-and confirms `src/llm_router/qwen_evidence.py` exists. If an older Colab session
-already cloned `develop`, rerunning the setup cell switches that checkout before
-imports. A missing helper is reported as a repository/source mismatch rather
-than a generic Python import failure.
+The default `qwen25_v5_context_ood_seed_42` run compares three representations
+on exactly the same split:
 
-V4 uses only the deployed safety loss, runs all five epochs, prints the active
-loss after every optimizer mini-batch, and restores the
-checkpoint with minimum validation safety loss. The oracle head and loss remain
-present for compatibility, with coefficient zero. Run and download one ZIP at
-a time:
+| Variant | Budget | Strategy |
+|---|---:|---|
+| `prefix_512` | 512 | beginning only; v4 control |
+| `prefix_1024` | 1,024 | beginning only |
+| `head_tail_1024` | 1,024 | beginning plus ending |
 
-1. `qwen25_v4_dataset_ood_seed_42`
-2. `qwen25_v4_dataset_ood_seed_43`
-3. `qwen25_v4_dataset_ood_seed_44`
-4. `qwen25_v4_random_seed_42`
-5. `qwen25_v4_random_seed_43`
-6. `qwen25_v4_random_seed_44`
-
-The OOD runs come first because investors need to see whether the router works
-on complete tasks absent from training. For example, a 30% saving on a random
-split does not establish domain generalization if an OOD run falls below the
-98% macro-quality-retention gate.
+For example, a 1,600-token input loses 1,088 tokens under the control and 576
+under either 1,024-token representation. Only validation chooses the winner;
+only the winner opens the sealed test.
 
 ## One-time Hugging Face access
 
-The three Open LLM Leaderboard detail repositories are auto-gated. Sign into
-Hugging Face, accept access on all three dataset pages, create a read token, and
-add it to Colab secrets as `HF_TOKEN`:
+Accept access to all three auto-gated Open LLM Leaderboard detail datasets and
+create a read-capable token:
 
 - `open-llm-leaderboard/Qwen__Qwen2.5-1.5B-Instruct-details`;
 - `open-llm-leaderboard/Qwen__Qwen2.5-3B-Instruct-details`; and
 - `open-llm-leaderboard/Qwen__Qwen2.5-7B-Instruct-details`.
 
-In Colab, open the **Secrets** panel with the key icon in the left sidebar,
-choose **Add new secret**, set the name to exactly `HF_TOKEN`, paste the token as
-the value, and turn on **Notebook access**. The name is case-sensitive. For
-example, `hf_token`, `HF-TOKEN`, and a disabled `HF_TOKEN` are all unavailable
-to `userdata.get("HF_TOKEN")`. After adding it, rerun the configuration cell;
-there is no need to run or download any Qwen weights.
+Add it to Colab Secrets as case-sensitive `HF_TOKEN` and enable notebook access.
+If it is absent, the notebook shows a hidden session-only prompt. A 401 after a
+valid token normally means one dataset's terms were not accepted or the token
+lacks read access to gated repositories.
 
-If you do not create a Colab secret, the same cell now displays a hidden
-session-only prompt. Paste the read token there and press Enter. For example,
-with zero configured secrets the cell asks once; after one nonempty token is
-entered, all three evidence repositories reuse that in-memory value. The token
-is not echoed, written to notebook output, or placed in the exported report.
+## Run order
 
-The token downloads JSONL and evaluation metadata. The notebook downloads one
-Qwen tokenizer only to count tokens; tokenization is not model inference.
+1. Select **Runtime → Change runtime type → GPU**.
+2. Run every cell from top to bottom with the default OOD seed 42.
+3. Verify the evidence audit has exactly three binary outcomes per retained
+   prompt. The maximum panel is $37\times300=11{,}100$ prompts and 33,300
+   prompt-model outcomes.
+4. Inspect the parallel-training preflight.
+5. Let all three variants finish five epochs. Each worker prints every optimizer
+   step with its variant name; validation is evaluated once per epoch.
+6. Confirm each variant restores its minimum-validation-loss epoch and that the
+   selected test setup came only from the validation comparison.
+7. Inspect the four-panel representation/OOD dashboard and run the final Gradio
+   prompt showcase.
+8. Download the ZIP before closing Colab.
 
-### If the second cell returns `401 GatedRepoError`
+The next repeat IDs are `qwen25_v5_context_ood_seed_43` and
+`qwen25_v5_context_ood_seed_44`. Random-split diagnostics use
+`qwen25_v5_context_random_seed_{42,43,44}`. Do not mix v3, v4, and v5 artifacts
+because their experiment contracts differ.
 
-Authentication and gated-dataset approval are separate. First, the notebook
-calls `whoami()` to confirm that the token itself is valid. It then attempts a
-pinned file download. If that download returns 401, open the reported dataset
-URL while signed into the same Hugging Face account, accept its access
-conditions, and confirm the token has **Read access to gated repositories**.
-Repeat this for all three Qwen detail datasets and rerun the cell.
+## Parallel GPU behavior
 
-For example, one valid read token plus approvals for only two of three datasets
-still produces an incomplete panel and must stop. One valid read token plus all
-three approvals permits the notebook to download the three aligned result sets.
+`PARALLEL_TRAINING_REQUESTED=True` asks for three Python workers on one GPU.
+The notebook enables them only when the GPU reports at least 14 GiB total memory
+and at least 80% free memory. Each worker uses batch size 4. Model construction
+is serialized to reduce simultaneous allocation spikes.
 
-## Correctness and quality audit
+This is a memory-based preflight, not a guarantee: three models also share GPU
+compute and memory bandwidth. If CUDA reports out-of-memory, restart the runtime,
+set `PARALLEL_TRAINING_REQUESTED=False`, and rerun all cells. Do not continue
+from a partially failed parallel run. Sequential fallback changes wall-clock
+time, not the scientific comparison.
 
-The detail files already contain task-aware per-example grading. The notebook
-does not regenerate an answer and does not replace those graders with a generic
-string comparison. It requires each selected metric to be exactly 0 (incorrect)
-or 1 (correct), stores the same result as `is_correct`, and calculates:
+## Frozen training contract
 
-$$
-\text{quality}=\frac{\text{correct published outcomes}}
-{\text{all published outcomes}}.
-$$
-
-For example, 255 correct outcomes among 300 records produce 85% quality. The
-run stops before ModernBERT training if a score is fractional, metrics conflict,
-a prompt/model pair is duplicated, prompts or metrics disagree across models,
-or any prompt lacks one of the three Qwen outcomes. Inspect and retain
-`qwen_quality_audit.csv` in the downloaded ZIP.
-
-## Frozen evidence contract
-
-The three pinned repositories contain the same 39 task files. V3 removes GPQA
-main and extended because they overlap with GPQA Diamond. It keeps at most 300
-aligned prompts from each of the remaining 37 tasks. The maximum panel is:
+Every variant uses rank-4 LoRA with alpha 8, the same class-balanced safety BCE,
+and zero oracle coefficient:
 
 $$
-37\times300=11{,}100\text{ prompts},\qquad
-11{,}100\times3=33{,}300\text{ published outcomes}.
+\mathcal L_{v5}=\mathcal L_{safety}+0\mathcal L_{oracle}.
 $$
 
-Tasks with fewer than 300 rows contribute every row. Evidence repository commits,
-evaluation run timestamps, exclusions, cap, and sampling seed are hashed into
-`EVIDENCE_TAG`. Every retained key must have the same document hash and rendered
-prompt for all three candidates.
-
-## Frozen v4 router and timing contracts
-
-Every v4 run trains the rank-4 safety-only setup. It keeps the same calibration,
-gate values, threshold grid, and requirement for two adjacent feasible
-thresholds. Training always completes five epochs because early stopping is
-disabled; export restores the epoch with the lowest validation safety loss.
-Only `RUN_ID` changes the split mode and seed.
-
-The exact optimization objective is
-$\mathcal L_{v4}=\mathcal L_{safety}+0\mathcal L_{oracle}$. For example, safety
-loss 0.223 and oracle diagnostic 0.477 still produce training loss 0.223. The
-oracle diagnostic can be inspected but cannot update ModernBERT or either head.
-
-Candidate latency remains analytical. The scenario uses BF16 because the
-published quality evidence does not establish that 4-bit quantization preserves
-every answer. Published candidate runtime is ignored. After validation freezes
-the policy, the notebook measures only ModernBERT batch-one overhead and compares
-p50/p95 with the policy's break-even value.
-
-For example, if a policy breaks even at 80 ms and ModernBERT measures 43 ms p50
-and 68 ms p95, both median and tail overhead fit the analytical opportunity. If
-p95 is 95 ms, median economics pass but tail economics do not.
+Thus, safety loss 0.223 plus oracle diagnostic 0.477 still optimizes 0.223. Each
+variant runs all five epochs with early stopping disabled. If its validation
+losses are 0.239, 0.241, 0.236, 0.241, and 0.241, epoch 3 is restored.
 
 ## Download checklist
 
-Before closing Colab:
+- `qwen_quality_audit.csv` has only complete binary outcomes;
+- `input_representation_comparison.csv` contains all three variants;
+- `parallel_training_facts.json` records enabled workers and memory facts;
+- `v5_input_representation_contract.json` records budgets, strategies, and loss;
+- every setup has training, calibration, and input diagnostics;
+- the selected setup alone has sealed-test decisions;
+- the dashboard's values agree with its CSV data;
+- ModernBERT p50/p95 are compared with analytical break-even;
+- the final prompt demo uses the selected tokenization strategy; and
+- explicit gate failures are retained, including fallback-only results.
 
-- confirm all retained keys have three published outcomes;
-- confirm `score` and `is_correct` agree and inspect `qwen_quality_audit.csv`;
-- confirm `qwen_weights_loaded=False` in the evidence log;
-- inspect the published metric used by every task;
-- confirm the ZIP name matches `RUN_ID`;
-- inspect every explicit validation and sealed-test failure reason;
-- confirm every training mini-batch printed `loss`, `safety`, and `running`;
-- confirm `v4_training_contract.json` reports five completed epochs, no early
-  stopping, oracle coefficient 0, per-step logging, and the retained
-  validation-best epoch;
-- inspect `investor_ood_dashboard.png` and its underlying
-  `investor_ood_dataset_summary.csv`;
-- compare ModernBERT p50 and p95 with break-even;
-- run the final notebook cell and verify a typed prompt returns a selected model;
-- download the ZIP; and
-- keep random and dataset-OOD artifacts separate.
-
-A fallback-only result shows that the guard worked. It does not show that learned
-prompt-level routing works.
-
-Notebook 03 and its unversioned `qwen25_*` run IDs remain the historical v3
-three-setup ablation. Do not combine those artifacts with v4 as if the loss and
-epoch contracts were unchanged.
+A lower truncation rate is not sufficient. The useful result is lower unseen-task
+validation loss or stronger validation ranking, followed by sealed-test quality
+and harm gates that pass.

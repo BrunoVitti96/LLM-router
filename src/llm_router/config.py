@@ -62,6 +62,7 @@ class RouterConfig:
     encoder_repo: str = "nomic-ai/modernbert-embed-base"
     encoder_revision: str = "d556a88e332558790b210f7bdbe87da2fa94a8d8"
     max_input_tokens: int = 512
+    input_truncation_strategy: str = "prefix"
     lora_r: int = 4
     lora_alpha: int = 8
     lora_dropout: float = 0.05
@@ -116,7 +117,8 @@ class RouterConfig:
         assert self.minimum_consecutive_feasible_thresholds == 2
         assert self.lora_r == 4 and self.lora_alpha == 8
         assert self.lora_target_modules == "all-linear"
-        assert self.max_input_tokens == 512
+        assert 0 < self.max_input_tokens <= 8192
+        assert self.input_truncation_strategy in {"prefix", "head_tail"}
         assert self.platt_folds == 5
         assert self.minimum_predicted_speedup == 0.02
 
@@ -160,6 +162,7 @@ class RouterConfig:
             "encoder_repo": self.encoder_repo,
             "encoder_revision": self.encoder_revision,
             "router_max_input_tokens": self.max_input_tokens,
+            "router_input_truncation_strategy": self.input_truncation_strategy,
             "lora": {
                 "r": self.lora_r,
                 "alpha": self.lora_alpha,

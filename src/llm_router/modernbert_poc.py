@@ -9,9 +9,11 @@ import subprocess
 import sys
 import time
 from collections.abc import Callable
+from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -20,6 +22,7 @@ from torch.utils.data import DataLoader, WeightedRandomSampler
 from transformers import get_cosine_schedule_with_warmup
 
 from llm_router.config import DEFAULT_CONFIG, RouterConfig
+from llm_router.input_representation import encode_router_texts
 from llm_router.models.modernbert_router import (
     HybridModernBERTRouter,
     build_hybrid_router,
@@ -43,7 +46,7 @@ class ModernBERTHybridPOCResult:
     fallback_index: int
     nonfallback_indices: np.ndarray
     history: pd.DataFrame
-    input_diagnostics: dict[str, float | int]
+    input_diagnostics: dict[str, float | int | str]
     router_input_lengths: np.ndarray
     router_was_truncated: np.ndarray
     encoder_learning_rate: float
@@ -83,6 +86,7 @@ def train_modernbert_hybrid_poc(
     step_progress_callback: (
         Callable[[dict[str, float | int | bool]], None] | None
     ) = None,
+    initialization_lock: AbstractContextManager[Any] | None = None,
 ) -> ModernBERTHybridPOCResult:
     """Train safety estimates while using the oracle only as an auxiliary task.
 
@@ -93,7 +97,8 @@ def train_modernbert_hybrid_poc(
     receives one structured dictionary after every epoch. The optional
     ``step_progress_callback`` receives the current mini-batch loss after every
     optimizer step, which lets notebooks show live training progress without
-    changing checkpoint selection.
+    changing checkpoint selection. ``initialization_lock`` may serialize model
+    construction when several experiments share one GPU in worker threads.
     """
 
     if head_learning_rate is None:
@@ -116,7 +121,6 @@ def train_modernbert_hybrid_poc(
         if device.startswith("cuda") and torch.cuda.get_device_capability(0)[0] >= 8
         else torch.float16
     )
-    seed_everything(config.seed)
     fallback_index = int(panel.score[split.train].mean(axis=0).argmax())
     nonfallback_indices = np.array(
         [index for index in range(len(panel.models)) if index != fallback_index],
@@ -132,11 +136,14 @@ def train_modernbert_hybrid_poc(
         ],
         dtype=object,
     )
-    model, tokenizer = build_hybrid_router(
-        config,
-        nonfallback_count=len(nonfallback_indices),
-        model_count=len(panel.models),
-    )
+    initialization_context = initialization_lock or nullcontext()
+    with initialization_context:
+        seed_everything(config.seed)
+        model, tokenizer = build_hybrid_router(
+            config,
+            nonfallback_count=len(nonfallback_indices),
+            model_count=len(panel.models),
+        )
     model.to(device)
 
     # Measure the router's own tokenization rather than approximating truncation
@@ -157,9 +164,10 @@ def train_modernbert_hybrid_poc(
             router_input_lengths.extend(sum(mask) for mask in attention_mask)
     input_lengths = np.asarray(router_input_lengths, dtype=int)
     truncated = input_lengths > config.max_input_tokens
-    input_diagnostics: dict[str, float | int] = {
+    input_diagnostics: dict[str, float | int | str] = {
         "examples": len(input_lengths),
         "max_input_tokens": int(config.max_input_tokens),
+        "truncation_strategy": config.input_truncation_strategy,
         "truncated_examples": int(truncated.sum()),
         "truncation_rate": float(truncated.mean()),
         "router_tokens_p50": float(np.quantile(input_lengths, 0.50)),
@@ -169,11 +177,12 @@ def train_modernbert_hybrid_poc(
 
     def collate(indices: list[int]):
         normalized = np.asarray(indices, dtype=int)
-        encoded = tokenizer(
+        encoded = encode_router_texts(
+            tokenizer,
             [f"classification: {texts[index]}" for index in normalized],
+            max_input_tokens=config.max_input_tokens,
+            truncation_strategy=config.input_truncation_strategy,
             padding=True,
-            truncation=True,
-            max_length=config.max_input_tokens,
             return_tensors="pt",
         )
         return normalized, encoded
@@ -569,6 +578,7 @@ def export_modernbert_hybrid_poc(
         "encoder_repo": config.encoder_repo,
         "encoder_revision": config.encoder_revision,
         "router_max_input_tokens": config.max_input_tokens,
+        "router_input_truncation_strategy": config.input_truncation_strategy,
         "model_names": model_names,
         "fallback_model": model_names[result.fallback_index],
         "nonfallback_models": nonfallback_models,

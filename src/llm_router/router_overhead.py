@@ -19,6 +19,8 @@ import numpy as np
 import pandas as pd
 import torch
 
+from llm_router.input_representation import encode_router_texts
+
 
 @dataclass(frozen=True)
 class RouterOverheadBenchmark:
@@ -60,6 +62,7 @@ def summarize_router_overhead_samples(
     device: str,
     warmup_requests: int,
     max_input_tokens: int,
+    input_truncation_strategy: str = "prefix",
 ) -> dict[str, Any]:
     """Build the stable, JSON-serializable benchmark summary."""
 
@@ -79,6 +82,7 @@ def summarize_router_overhead_samples(
         "timed_requests": int(end_to_end_s.size),
         "warmup_requests": int(warmup_requests),
         "max_input_tokens": int(max_input_tokens),
+        "input_truncation_strategy": input_truncation_strategy,
         "device": device,
         "gpu": gpu,
         "torch_version": torch.__version__,
@@ -97,6 +101,7 @@ def benchmark_modernbert_overhead(
     *,
     device: str,
     max_input_tokens: int = 512,
+    input_truncation_strategy: str = "prefix",
     timed_requests: int = 100,
     warmup_requests: int = 10,
     seed: int = 42,
@@ -137,11 +142,12 @@ def benchmark_modernbert_overhead(
             torch.cuda.synchronize()
 
     def encode(text: str):
-        return tokenizer(
+        return encode_router_texts(
+            tokenizer,
             [text],
+            max_input_tokens=max_input_tokens,
+            truncation_strategy=input_truncation_strategy,
             padding=True,
-            truncation=True,
-            max_length=max_input_tokens,
             return_tensors="pt",
         ).to(device)
 
@@ -186,6 +192,7 @@ def benchmark_modernbert_overhead(
         device=device,
         warmup_requests=warmup_requests,
         max_input_tokens=max_input_tokens,
+        input_truncation_strategy=input_truncation_strategy,
     )
     samples = pd.DataFrame(
         {
