@@ -24,6 +24,7 @@ from transformers import get_cosine_schedule_with_warmup
 from llm_router.config import DEFAULT_CONFIG, RouterConfig
 from llm_router.input_representation import encode_router_texts
 from llm_router.models.modernbert_router import (
+    MODERNBERT_REFERENCE_COMPILE,
     HybridModernBERTRouter,
     build_hybrid_router,
 )
@@ -577,6 +578,7 @@ def export_modernbert_hybrid_poc(
         "oracle_role": "training-only auxiliary loss",
         "encoder_repo": config.encoder_repo,
         "encoder_revision": config.encoder_revision,
+        "encoder_reference_compile": MODERNBERT_REFERENCE_COMPILE,
         "router_max_input_tokens": config.max_input_tokens,
         "router_input_truncation_strategy": config.input_truncation_strategy,
         "model_names": model_names,

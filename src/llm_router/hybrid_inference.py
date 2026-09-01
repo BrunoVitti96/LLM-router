@@ -27,7 +27,10 @@ from llm_router.analytical_latency import (
 )
 from llm_router.config import RouterConfig
 from llm_router.input_representation import encode_router_texts
-from llm_router.models.modernbert_router import HybridModernBERTRouter
+from llm_router.models.modernbert_router import (
+    MODERNBERT_REFERENCE_COMPILE,
+    HybridModernBERTRouter,
+)
 from llm_router.public_benchmark import EconomicsScenario, ModelProfile
 
 
@@ -225,6 +228,9 @@ class HybridModernBERTRouterRuntime:
             manifest["encoder_repo"],
             revision=manifest["encoder_revision"],
             attn_implementation="sdpa",
+            reference_compile=manifest.get(
+                "encoder_reference_compile", MODERNBERT_REFERENCE_COMPILE
+            ),
         )
         hidden_size = int(base.config.hidden_size)
         encoder = PeftModel.from_pretrained(base, artifact_dir / "lora_adapter")

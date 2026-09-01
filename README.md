@@ -90,7 +90,7 @@ test prompts, estimated 28.24% analytical savings at 20 ms overhead, and finishe
 eight answers ahead of fallback, but still failed its macro-dataset gate. Neither
 single seed supports a production or universal-generalization claim.
 
-## V5 status: input-representation experiment built, not yet run
+## V5 status: first execution exposed a compile/thread incompatibility
 
 [`05_train_modernbert_input_representation_ood_v5.ipynb`](notebooks/05_train_modernbert_input_representation_ood_v5.ipynb)
 holds the loss, LoRA capacity, split, seed, calibration, thresholds, gates, and
@@ -109,6 +109,24 @@ allowed to open the sealed test. V5 has no results yet, so no chart or claim in
 the notebook should be presented as observed evidence until it is executed and
 its ZIP is retained.
 
+The first Colab attempt reached the fifth training epoch but stopped before
+representation selection with `Detected that you are using FX to symbolically
+trace a dynamo-optimized function`. The traceback entered ModernBERT's optional
+compiled MLP from one of the three worker threads. This was an execution-backend
+failure, not a failed quality gate: the sealed test was never opened and no v5
+result was produced.
+
+The router now loads ModernBERT with `reference_compile=False` for training and
+artifact inference. In plain language, the three workers use the ordinary eager
+encoder instead of asking PyTorch to compile encoder fragments concurrently.
+Technically, Transformers 4.53.1 otherwise enables `torch.compile(dynamic=True)`
+when Triton is present, while PyTorch Dynamo/FX compilation uses process-global
+state that is unsafe under this threaded workload. The eager path evaluates the
+same attention, MLP, pooling, LoRA, and heads; it trades the optional compile
+speedup for a stable run. With three variants and five epochs, the experiment
+still performs $3\times5=15$ model-epochs and retains one validation-best
+checkpoint per variant. A clean rerun is required before claiming results.
+
 V5 requests three concurrent workers on one GPU because the v4 run left memory
 headroom. A coarse preflight requires at least 14 GiB total GPU memory and 80%
 free memory; otherwise it runs sequentially. Each parallel worker uses batch
@@ -117,6 +135,11 @@ initialization spikes. Parallelism reduces wall-clock time only if compute and
 memory bandwidth remain available—it does not make one GPU equivalent to three.
 If CUDA still reports out-of-memory, restart the runtime, set
 `PARALLEL_TRAINING_REQUESTED=False`, and rerun.
+
+The v5 artifact contract records `modernbert_reference_compile=false`. This
+switch changes only the encoder execution backend; it does not change the
+safety labels, class-balanced BCE, LoRA rank, optimizer, calibration, policy
+gates, or analytical latency model.
 
 The shared safety-only training contract is:
 

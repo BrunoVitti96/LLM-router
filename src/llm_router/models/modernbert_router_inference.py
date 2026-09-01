@@ -16,7 +16,10 @@ from transformers import AutoModel, AutoTokenizer
 from llm_router.input_representation import encode_router_texts
 from llm_router.utils.text import format_router_input
 
-from .modernbert_router import DecisionAlignedRouter
+from .modernbert_router import (
+    MODERNBERT_REFERENCE_COMPILE,
+    DecisionAlignedRouter,
+)
 
 
 @dataclass(frozen=True)
@@ -79,6 +82,9 @@ class ModernBERTRouterInference:
             manifest["encoder_repo"],
             revision=manifest["encoder_revision"],
             attn_implementation="sdpa",
+            reference_compile=manifest.get(
+                "encoder_reference_compile", MODERNBERT_REFERENCE_COMPILE
+            ),
         )
         hidden_size = int(base.config.hidden_size)
         encoder = PeftModel.from_pretrained(base, artifact_dir / "lora_adapter")

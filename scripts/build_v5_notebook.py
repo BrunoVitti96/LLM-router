@@ -106,6 +106,13 @@ config_source = config_source.replace(
     "from concurrent.futures import ThreadPoolExecutor, as_completed\n"
     "from dataclasses import replace\n",
 )
+config_source = config_source.replace(
+    "from llm_router.modernbert_poc import (\n",
+    "from llm_router.models.modernbert_router import (\n"
+    "    MODERNBERT_REFERENCE_COMPILE,\n"
+    ")\n"
+    "from llm_router.modernbert_poc import (\n",
+)
 config_source = replace_between(
     config_source,
     "RUN_SPECS = {",
@@ -160,6 +167,7 @@ V5_INPUT_CONTRACT = {
     "epochs": EPOCHS,
     "checkpoint_rule": "minimum validation safety loss",
     "parallel_training_requested": PARALLEL_TRAINING_REQUESTED,
+    "modernbert_reference_compile": MODERNBERT_REFERENCE_COMPILE,
     "batch_size_per_variant": PARALLEL_BATCH_SIZE,
     "variants": SETUP_SPECS,
 }
@@ -168,6 +176,7 @@ assert tuple(SETUP_SPECS) == (
 )
 assert EPOCHS == MINIMUM_EPOCHS == 5
 assert EARLY_STOPPING_PATIENCE is None
+assert MODERNBERT_REFERENCE_COMPILE is False
 
 ''',
 )
@@ -210,6 +219,12 @@ The memory preflight records total and free GPU memory. A T4 with sufficient
 headroom launches three worker threads, each with batch size 4. Model downloads
 and construction are serialized; optimization overlaps. If the preflight fails,
 the notebook runs the exact same configurations sequentially.
+
+ModernBERT's optional internal `torch.compile` reference path is explicitly
+disabled. PyTorch's Dynamo/FX compiler state is not safe for these concurrent
+worker threads; eager execution computes the same encoder equations without the
+compile race. For example, three variants still train $3 \times 5=15$ total
+model-epochs, but none can enter a shared Dynamo graph-compilation state.
 
 Step callbacks fire and print after every optimizer step. Each line includes the
 variant name so the three interleaved parallel logs remain attributable. Epoch
@@ -648,6 +663,7 @@ notebook["metadata"]["v5_contract"] = {
         "head_tail_1024": {"max_input_tokens": 1024, "strategy": "head_tail"},
     },
     "parallel_training_requested": True,
+    "modernbert_reference_compile": False,
     "loss": "safety-only",
     "epochs": 5,
     "default_split": "dataset_ood",

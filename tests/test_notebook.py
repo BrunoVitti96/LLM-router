@@ -244,6 +244,9 @@ def test_qwen_tier_v5_notebook_is_clean_parallel_input_experiment():
         "PARALLEL_TRAINING_ENABLED",
         "PARALLEL_BATCH_SIZE = 4",
         "STEP_LOG_EVERY = 1",
+        '"modernbert_reference_compile": MODERNBERT_REFERENCE_COMPILE',
+        "assert MODERNBERT_REFERENCE_COMPILE is False",
+        "ModernBERT's optional internal `torch.compile` reference path",
         "initialization_lock=MODEL_INITIALIZATION_LOCK",
         "minimum validation safety loss",
         "input_representation_comparison.csv",
@@ -259,6 +262,9 @@ def test_qwen_tier_v5_notebook_is_clean_parallel_input_experiment():
     assert full_text.count("train_modernbert_hybrid_poc(") == 1
     assert "AutoModelForCausalLM" not in full_text
     assert ".generate(" not in full_text
+    assert notebook["metadata"]["v5_contract"][
+        "modernbert_reference_compile"
+    ] is False
 
     assert notebook["cells"][-1]["cell_type"] == "code"
     assert "demo.launch" in "".join(notebook["cells"][-1]["source"])

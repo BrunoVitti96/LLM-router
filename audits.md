@@ -8,6 +8,42 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-09-01 — V5 threaded ModernBERT compile failure fixed
+
+The first notebook-05 Colab attempt downloaded and audited the evidence, passed
+the 14 GiB/80%-free parallel preflight on a Tesla T4, and trained the three input
+variants through most or all of epoch 5. It then stopped before validation-only
+representation selection. The saved traceback ended in ModernBERT's
+`compiled_mlp` with `Detected that you are using FX to symbolically trace a
+dynamo-optimized function`.
+
+In plain language, the experiment did not fail a quality check. Three training
+workers collided inside an optional PyTorch compilation mechanism, so the
+notebook never selected a representation and never opened the sealed test. No
+v5 result is claimed from the partial run.
+
+Technically, pinned Transformers 4.53.1 decorates ModernBERT's reference MLP
+with `torch.compile(dynamic=True)` and enables it when Triton is available.
+PyTorch Dynamo/FX compilation relies on shared state that is not safe for this
+multi-threaded workload. Model initialization had already been serialized, but
+the first forward pass for a new sequence shape can compile later during
+training or validation, outside that lock. This explains why the error appeared
+late rather than at model construction.
+
+All project ModernBERT constructors now pass `reference_compile=False`, and
+hybrid artifacts record `encoder_reference_compile=false`. Training and both
+artifact loaders therefore use eager execution consistently. A regression test
+checks both trainable router builders, and notebook metadata plus Markdown
+record the compatibility choice. The deterministic notebook builder removes the
+failed execution state and regenerates a clean rerunnable notebook.
+
+This is not a model or policy change. For a numerical example, the v5 plan still
+trains three variants for five epochs, or $3\times5=15$ model-epochs, with the
+same rank-4 LoRA and safety BCE. Only the optional compile optimization changes
+from enabled to disabled. Wall-clock time may increase, but safety targets,
+checkpoint selection, calibrated probabilities, thresholds, and analytical
+candidate latencies are unchanged.
+
 ## 2026-08-31 — V5 input-representation isolation after the v4 OOD failure
 
 The executed notebook-04 dataset-OOD seed-42 run reduced training loss from

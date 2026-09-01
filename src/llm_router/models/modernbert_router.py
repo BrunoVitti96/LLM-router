@@ -9,6 +9,14 @@ from transformers import AutoModel, AutoTokenizer
 from llm_router.config import RouterConfig
 
 
+# ModernBERT 4.53 enables an internal ``torch.compile(dynamic=True)`` path when
+# Triton is available. PyTorch's Dynamo/FX compiler state is not thread-safe,
+# so that optional optimization can fail when notebook 05 trains independent
+# variants in worker threads. Eager execution preserves the model equations and
+# is the reproducible project-wide default for both training and inference.
+MODERNBERT_REFERENCE_COMPILE = False
+
+
 class DecisionAlignedRouter(torch.nn.Module):
     """Masked-mean ModernBERT representation with three prediction heads."""
 
@@ -77,6 +85,7 @@ def build_trainable_router(
         config.encoder_repo,
         revision=config.encoder_revision,
         attn_implementation="sdpa",
+        reference_compile=MODERNBERT_REFERENCE_COMPILE,
     )
     hidden_size = int(base_encoder.config.hidden_size)
     lora_config = LoraConfig(
@@ -112,6 +121,7 @@ def build_hybrid_router(
         config.encoder_repo,
         revision=config.encoder_revision,
         attn_implementation="sdpa",
+        reference_compile=MODERNBERT_REFERENCE_COMPILE,
     )
     hidden_size = int(base_encoder.config.hidden_size)
     lora_config = LoraConfig(
