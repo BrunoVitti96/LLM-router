@@ -141,6 +141,13 @@ switch changes only the encoder execution backend; it does not change the
 safety labels, class-balanced BCE, LoRA rank, optimizer, calibration, policy
 gates, or analytical latency model.
 
+The export cell reads the inactive oracle coefficient from the shared
+`V5_INPUT_CONTRACT`, not from a representation entry. Representation entries
+contain only token budget and truncation strategy. For example,
+`head_tail_1024` supplies `1024` and `head_tail`, while the shared contract
+supplies the unchanged oracle coefficient `0.0`. This prevents export from
+raising `KeyError: 'oracle_auxiliary_weight'` after a completed run.
+
 The shared safety-only training contract is:
 
 | Contract item | V5 value | Practical meaning |

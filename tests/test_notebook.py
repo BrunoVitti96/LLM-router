@@ -252,6 +252,7 @@ def test_qwen_tier_v5_notebook_is_clean_parallel_input_experiment():
         "input_representation_comparison.csv",
         "parallel_training_facts.json",
         "v5_input_representation_contract.json",
+        'V5_INPUT_CONTRACT["oracle_auxiliary_weight"]',
         "Train versus OOD-validation safety loss",
         "Does less truncation improve validation?",
         "create_gradio_demo",
@@ -262,6 +263,7 @@ def test_qwen_tier_v5_notebook_is_clean_parallel_input_experiment():
     assert full_text.count("train_modernbert_hybrid_poc(") == 1
     assert "AutoModelForCausalLM" not in full_text
     assert ".generate(" not in full_text
+    assert 'selected_spec["oracle_auxiliary_weight"]' not in full_text
     assert notebook["metadata"]["v5_contract"][
         "modernbert_reference_compile"
     ] is False

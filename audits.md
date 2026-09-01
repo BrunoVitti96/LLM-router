@@ -8,6 +8,27 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-09-01 — V5 export used the shared oracle coefficient
+
+A notebook-05 execution reached the artifact cell and raised
+`KeyError: 'oracle_auxiliary_weight'`. The export code still expected the v4
+schema, where each setup declared its own oracle coefficient. V5 setup entries
+describe only input representation: token budget and truncation strategy. The
+coefficient is frozen once for all three variants in `V5_INPUT_CONTRACT`.
+
+The export call now reads
+`V5_INPUT_CONTRACT["oracle_auxiliary_weight"]`, which is `0.0`, and the unused
+`selected_spec` variable was removed. In numerical terms, all three variants
+export the same $1.0\mathcal L_{safety}+0.0\mathcal L_{oracle}$ contract; selecting
+`prefix_512`, `prefix_1024`, or `head_tail_1024` changes the encoded tokens but
+never the loss coefficient. A notebook regression check rejects the stale
+per-representation lookup.
+
+This was an export-schema bug, not a training, selection, or routing-policy
+change. In a still-live Colab runtime, rerunning only the corrected export cell
+is sufficient because `result`, `trainings`, and the selected checkpoint already
+exist in memory.
+
 ## 2026-09-01 — V5 threaded ModernBERT compile failure fixed
 
 The first notebook-05 Colab attempt downloaded and audited the evidence, passed

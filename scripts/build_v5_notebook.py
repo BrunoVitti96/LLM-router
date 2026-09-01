@@ -396,6 +396,9 @@ selection_source = selection_source.replace(
 selection_source = selection_source.replace(
     'assert SELECTED_SETUP == "safety_only_r4"\n', ""
 )
+selection_source = selection_source.replace(
+    "selected_spec = SETUP_SPECS[SELECTED_SETUP]\n", ""
+)
 cells[selection_index]["source"] = source_lines(selection_source)
 
 overhead_index = find_cell(cells, "router_overhead_benchmark = None")
@@ -609,6 +612,12 @@ export_source = export_source.replace(
     '(report_dir / "v5_input_representation_contract.json").write_text(',
 )
 export_source = export_source.replace("**V4_TRAINING_CONTRACT", "**V5_INPUT_CONTRACT")
+export_source = export_source.replace(
+    '    oracle_auxiliary_weight=selected_spec["oracle_auxiliary_weight"],\n',
+    '    oracle_auxiliary_weight=(\n'
+    '        V5_INPUT_CONTRACT["oracle_auxiliary_weight"]\n'
+    '    ),\n',
+)
 export_source = export_source.replace(
     'overhead_comparison.to_csv(\n    report_dir / "modernbert_overhead_comparison.csv", index=False\n)\n',
     'overhead_comparison.to_csv(\n'
