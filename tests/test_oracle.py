@@ -138,6 +138,7 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
         dataset_balanced_sampling=True,
         device="cpu",
         step_progress_callback=step_rows.append,
+        gradient_accumulation_steps=2,
     )
     assert result.safety_probabilities.shape == panel.score.shape
     assert result.raw_safety_probabilities.shape == panel.score.shape
@@ -161,6 +162,7 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
     assert result.epochs_completed == 1
     assert not result.stopped_early
     assert result.dataset_balanced_sampling
+    assert result.gradient_accumulation_steps == 2
     assert result.input_diagnostics["examples"] == len(panel.examples)
     assert result.router_input_lengths.shape == (len(panel.examples),)
     assert result.router_was_truncated.shape == (len(panel.examples),)
@@ -169,6 +171,8 @@ def test_modernbert_poc_training_predicts_safety_with_oracle_auxiliary(monkeypat
     assert [row["global_step"] for row in step_rows] == [1, 2]
     assert all(row["epochs"] == 1 for row in step_rows)
     assert all(row["steps_per_epoch"] == 2 for row in step_rows)
+    assert [row["optimizer_step_performed"] for row in step_rows] == [False, True]
+    assert [row["completed_optimizer_steps"] for row in step_rows] == [0, 1]
     assert all(row["step_total_loss"] >= 0 for row in step_rows)
     assert all(row["step_safety_loss"] >= 0 for row in step_rows)
     assert all(row["running_train_total_loss"] >= 0 for row in step_rows)

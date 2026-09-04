@@ -29,13 +29,18 @@ class RouterOverheadBenchmark:
     summary: dict[str, Any]
     samples: pd.DataFrame
 
-    def export(self, output_dir: str | Path) -> tuple[Path, Path]:
+    def export(
+        self,
+        output_dir: str | Path,
+        *,
+        file_stem: str = "modernbert_overhead",
+    ) -> tuple[Path, Path]:
         """Write auditable JSON summary and CSV timings into a report directory."""
 
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
-        summary_path = output_dir / "modernbert_overhead_benchmark.json"
-        samples_path = output_dir / "modernbert_overhead_samples.csv"
+        summary_path = output_dir / f"{file_stem}_benchmark.json"
+        samples_path = output_dir / f"{file_stem}_samples.csv"
         summary_path.write_text(
             json.dumps(self.summary, indent=2), encoding="utf-8"
         )
@@ -63,6 +68,7 @@ def summarize_router_overhead_samples(
     warmup_requests: int,
     max_input_tokens: int,
     input_truncation_strategy: str = "prefix",
+    router_display_name: str = "ModernBERT",
 ) -> dict[str, Any]:
     """Build the stable, JSON-serializable benchmark summary."""
 
@@ -74,9 +80,12 @@ def summarize_router_overhead_samples(
     return {
         "schema_version": 1,
         "measured_component": (
-            "ModernBERT tokenization, host-to-device transfer, and router inference"
+            f"{router_display_name} tokenization, host-to-device transfer, "
+            "and router inference"
         ),
-        "candidate_latency_method": "analytical; candidate LLMs were not loaded",
+        "candidate_latency_method": (
+            "analytical; candidate answer generation was not run or timed"
+        ),
         "measurement_affects_frozen_policy": False,
         "batch_size": 1,
         "timed_requests": int(end_to_end_s.size),
@@ -105,6 +114,9 @@ def benchmark_modernbert_overhead(
     timed_requests: int = 100,
     warmup_requests: int = 10,
     seed: int = 42,
+    router_text_prefix: str = "classification: ",
+    router_text_suffix: str = "",
+    router_display_name: str = "ModernBERT",
 ) -> RouterOverheadBenchmark:
     """Time batch-one ModernBERT routing on deterministic prompt samples.
 
@@ -124,11 +136,12 @@ def benchmark_modernbert_overhead(
 
     rng = np.random.default_rng(seed)
     indices = rng.choice(len(prompts), size=timed_requests, replace=True)
-    texts = [
-        f"classification: [PROMPT_TOKENS={int(prompt_tokens[index])}] "
-        f"{prompts[index]}"
-        for index in indices
-    ]
+    texts = []
+    for index in indices:
+        core_text = (
+            f"[PROMPT_TOKENS={int(prompt_tokens[index])}] {prompts[index]}"
+        )
+        texts.append(f"{router_text_prefix}{core_text}{router_text_suffix}")
     original_device = next(model.parameters()).device
     model.to(device).eval()
     compute_dtype = (
@@ -193,6 +206,7 @@ def benchmark_modernbert_overhead(
         warmup_requests=warmup_requests,
         max_input_tokens=max_input_tokens,
         input_truncation_strategy=input_truncation_strategy,
+        router_display_name=router_display_name,
     )
     samples = pd.DataFrame(
         {

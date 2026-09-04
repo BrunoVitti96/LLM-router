@@ -1,4 +1,26 @@
-# Colab v5 input-representation runbook
+# Colab V6 causal-router runbook
+
+Run `notebooks/06_train_qwen15_last_token_router_ood_v6.ipynb` from top to
+bottom on a fresh GPU runtime. An A100 is preferred; a T4 may require several
+hours. The default run loads Qwen2.5-1.5B as a prompt-only router, keeps the
+first 1,023 tokens plus Qwen's existing one-token `<|endoftext|>` sentinel, and
+reads the final sentinel state through two independent safety heads. It never
+generates candidate answers.
+
+Keep `RUN_ID = "qwen25_v6_qwen_router_ood_seed_42"` for the direct V5
+development comparison. Micro-batch size one and four-step gradient
+accumulation preserve effective batch size four. For example, 5,274 training
+prompts produce $\lceil5{,}274/4\rceil=1{,}319$ optimizer updates per epoch.
+Do not reduce the 1,024-token budget after an out-of-memory error; restart on a
+larger GPU so the experiment identity stays fixed.
+
+After training, verify the validation threshold was frozen before the test
+comparison, inspect probability spans and within-dataset ROC-AUC, compare
+measured Qwen-router p95 with break-even overhead, and download the generated
+ZIP. Seed 42 is not fresh sealed evidence because its V5 outcomes motivated V6.
+Use untouched seeds or new task families for confirmation.
+
+## Historical V5 input-representation runbook
 
 ## Goal
 

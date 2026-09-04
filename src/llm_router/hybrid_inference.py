@@ -31,6 +31,10 @@ from llm_router.models.modernbert_router import (
     MODERNBERT_REFERENCE_COMPILE,
     HybridModernBERTRouter,
 )
+from llm_router.models.qwen_last_token_router import (
+    QWEN_LAST_TOKEN_POOLING,
+    QwenLastTokenRouter,
+)
 from llm_router.public_benchmark import EconomicsScenario, ModelProfile
 
 
@@ -153,6 +157,9 @@ class HybridModernBERTRouterRuntime:
         scenario: EconomicsScenario,
         device: str,
         input_truncation_strategy: str = "prefix",
+        router_text_prefix: str = "classification: ",
+        router_text_suffix: str = "",
+        router_display_name: str = "ModernBERT",
     ) -> None:
         if scenario.latency_method != "analytical":
             raise ValueError("The hybrid demo requires analytical candidate latency.")
@@ -169,6 +176,9 @@ class HybridModernBERTRouterRuntime:
         self.minimum_predicted_savings = float(minimum_predicted_savings)
         self.max_input_tokens = int(max_input_tokens)
         self.input_truncation_strategy = input_truncation_strategy
+        self.router_text_prefix = router_text_prefix
+        self.router_text_suffix = router_text_suffix
+        self.router_display_name = router_display_name
         self.scenario = scenario
         self.device = device
         self.compute_dtype = (
@@ -192,6 +202,9 @@ class HybridModernBERTRouterRuntime:
         scenario: EconomicsScenario,
         config: RouterConfig,
         device: str,
+        router_text_prefix: str = "classification: ",
+        router_text_suffix: str = "",
+        router_display_name: str = "ModernBERT",
     ) -> HybridModernBERTRouterRuntime:
         """Reuse the already-loaded best checkpoint inside the Colab notebook."""
 
@@ -208,6 +221,9 @@ class HybridModernBERTRouterRuntime:
             input_truncation_strategy=config.input_truncation_strategy,
             scenario=scenario,
             device=device,
+            router_text_prefix=router_text_prefix,
+            router_text_suffix=router_text_suffix,
+            router_display_name=router_display_name,
         )
 
     @classmethod
@@ -224,17 +240,37 @@ class HybridModernBERTRouterRuntime:
             artifact_dir.parent / "experiment_manifest.json"
         )
         tokenizer = AutoTokenizer.from_pretrained(artifact_dir / "tokenizer")
+        is_qwen_last_token = (
+            manifest.get("pooling_strategy") == QWEN_LAST_TOKEN_POOLING
+        )
+        if is_qwen_last_token:
+            tokenizer.padding_side = "right"
+        model_kwargs: dict[str, Any] = {"attn_implementation": "sdpa"}
+        if not is_qwen_last_token:
+            model_kwargs["reference_compile"] = manifest.get(
+                "encoder_reference_compile", MODERNBERT_REFERENCE_COMPILE
+            )
+        elif device.startswith("cuda") and torch.cuda.is_available():
+            model_kwargs["torch_dtype"] = (
+                torch.bfloat16
+                if torch.cuda.get_device_capability(0)[0] >= 8
+                else torch.float16
+            )
         base = AutoModel.from_pretrained(
             manifest["encoder_repo"],
             revision=manifest["encoder_revision"],
-            attn_implementation="sdpa",
-            reference_compile=manifest.get(
-                "encoder_reference_compile", MODERNBERT_REFERENCE_COMPILE
-            ),
+            **model_kwargs,
         )
         hidden_size = int(base.config.hidden_size)
         encoder = PeftModel.from_pretrained(base, artifact_dir / "lora_adapter")
-        model = HybridModernBERTRouter(
+        if is_qwen_last_token:
+            base.config.use_cache = False
+        router_class = (
+            QwenLastTokenRouter
+            if is_qwen_last_token
+            else HybridModernBERTRouter
+        )
+        model = router_class(
             encoder,
             hidden_size,
             len(manifest["nonfallback_models"]),
@@ -266,6 +302,9 @@ class HybridModernBERTRouterRuntime:
             ),
             scenario=scenario,
             device=device,
+            router_text_prefix=manifest.get("router_text_prefix", "classification: "),
+            router_text_suffix=manifest.get("router_text_suffix", ""),
+            router_display_name=manifest.get("router", "ModernBERT"),
         )
 
     def _candidate_latency(self, prompt_tokens: float) -> dict[str, float]:
@@ -312,7 +351,8 @@ class HybridModernBERTRouterRuntime:
             raise ValueError("Prompt cannot be empty.")
         if not np.isfinite(prompt_tokens) or prompt_tokens < 0:
             raise ValueError("prompt_tokens must be finite and non-negative.")
-        text = f"classification: [PROMPT_TOKENS={int(prompt_tokens)}] {prompt}"
+        core_text = f"[PROMPT_TOKENS={int(prompt_tokens)}] {prompt}"
+        text = f"{self.router_text_prefix}{core_text}{self.router_text_suffix}"
         if self.device.startswith("cuda"):
             torch.cuda.synchronize()
         started = time.perf_counter()
@@ -390,9 +430,10 @@ def create_gradio_demo(runtime: HybridModernBERTRouterRuntime):
             gr.Number(value=128, minimum=0, label="Estimated candidate prompt tokens"),
         ],
         outputs=gr.JSON(label="Routing decision"),
-        title="Calibrated ModernBERT analytical-latency router",
+        title=f"Calibrated {runtime.router_display_name} analytical-latency router",
         description=(
-            "ModernBERT is measured for this request. Candidate latency is computed "
+            f"{runtime.router_display_name} is measured for this request. "
+            "Candidate latency is computed "
             "analytically from model size, architecture, precision, prompt length, "
             "and the frozen hardware scenario."
         ),

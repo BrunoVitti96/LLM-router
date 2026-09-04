@@ -1,0 +1,10 @@
+{
+  "examples": 8632,
+  "max_input_tokens": 1024,
+  "truncation_strategy": "prefix",
+  "truncated_examples": 1013,
+  "truncation_rate": 0.11735403151065801,
+  "router_tokens_p50": 675.5,
+  "router_tokens_p95": 1271.0,
+  "router_tokens_max": 2523
+}

@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "measured_component": "ModernBERT tokenization, host-to-device transfer, and router inference",
+  "candidate_latency_method": "analytical; candidate LLMs were not loaded",
+  "measurement_affects_frozen_policy": false,
+  "batch_size": 1,
+  "timed_requests": 100,
+  "warmup_requests": 10,
+  "max_input_tokens": 1024,
+  "input_truncation_strategy": "prefix",
+  "device": "cuda",
+  "gpu": "Tesla T4",
+  "torch_version": "2.11.0+cu128",
+  "cuda_runtime": "12.8",
+  "platform": "Linux-6.6.122+-x86_64-with-glibc2.35",
+  "end_to_end_ms": {
+    "mean": 49.939590570011205,
+    "p50": 45.992098500391876,
+    "p95": 69.47792660066625,
+    "maximum": 75.306044998797
+  },
+  "model_only_ms": {
+    "mean": 46.480237749947264,
+    "p50": 42.391203999613936,
+    "p95": 64.15723014843024,
+    "maximum": 73.60995700037165
+  }
+}

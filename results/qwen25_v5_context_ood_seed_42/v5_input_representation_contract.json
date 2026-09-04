@@ -1,0 +1,41 @@
+{
+  "batch_size_per_variant": 4,
+  "best_epoch": 3,
+  "checkpoint_rule": "minimum validation safety loss",
+  "epochs": 5,
+  "epochs_completed": 5,
+  "lora_alpha": 8,
+  "lora_rank": 4,
+  "loss": "class-balanced fallback-relative safety BCE",
+  "modernbert_reference_compile": false,
+  "oracle_auxiliary_weight": 0.0,
+  "parallel_training": {
+    "batch_size_per_variant": 4,
+    "enabled": true,
+    "free_fraction_before_training": 0.9929673977276061,
+    "free_gib_before_training": 14.46075439453125,
+    "gpu": "Tesla T4",
+    "requested": true,
+    "total_gib": 14.56317138671875,
+    "workers": 3
+  },
+  "parallel_training_requested": true,
+  "run_contract_tag": "cccc431ead439740",
+  "run_id": "qwen25_v5_context_ood_seed_42",
+  "selected_setup": "prefix_1024",
+  "variants": {
+    "head_tail_1024": {
+      "input_truncation_strategy": "head_tail",
+      "max_input_tokens": 1024
+    },
+    "prefix_1024": {
+      "input_truncation_strategy": "prefix",
+      "max_input_tokens": 1024
+    },
+    "prefix_512": {
+      "input_truncation_strategy": "prefix",
+      "max_input_tokens": 512
+    }
+  },
+  "version": "v5-input-representation-parallel"
+}

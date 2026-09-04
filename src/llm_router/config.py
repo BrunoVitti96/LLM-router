@@ -118,7 +118,11 @@ class RouterConfig:
         assert self.lora_r == 4 and self.lora_alpha == 8
         assert self.lora_target_modules == "all-linear"
         assert 0 < self.max_input_tokens <= 8192
-        assert self.input_truncation_strategy in {"prefix", "head_tail"}
+        assert self.input_truncation_strategy in {
+            "prefix",
+            "head_tail",
+            "prefix_with_last",
+        }
         assert self.platt_folds == 5
         assert self.minimum_predicted_speedup == 0.02
 

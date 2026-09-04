@@ -13,7 +13,7 @@ from contextlib import AbstractContextManager, nullcontext
 from dataclasses import dataclass
 from importlib import metadata
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import numpy as np
 import pandas as pd
@@ -25,7 +25,6 @@ from llm_router.config import DEFAULT_CONFIG, RouterConfig
 from llm_router.input_representation import encode_router_texts
 from llm_router.models.modernbert_router import (
     MODERNBERT_REFERENCE_COMPILE,
-    HybridModernBERTRouter,
     build_hybrid_router,
 )
 from llm_router.oracle import hybrid_routing_loss, replacement_safety_targets
@@ -36,7 +35,7 @@ from llm_router.utils.training import seed_everything
 
 @dataclass(frozen=True)
 class ModernBERTHybridPOCResult:
-    model: HybridModernBERTRouter
+    model: torch.nn.Module
     tokenizer: object
     safety_probabilities: np.ndarray
     raw_safety_probabilities: np.ndarray
@@ -58,7 +57,19 @@ class ModernBERTHybridPOCResult:
     epochs_completed: int
     stopped_early: bool
     dataset_balanced_sampling: bool
+    gradient_accumulation_steps: int
     training_seconds: float
+
+
+class HybridRouterBuilder(Protocol):
+    """Construct one prompt encoder and the shared safety/oracle heads."""
+
+    def __call__(
+        self,
+        config: RouterConfig,
+        nonfallback_count: int,
+        model_count: int,
+    ) -> tuple[torch.nn.Module, object]: ...
 
 
 def _autocast(device: str, dtype: torch.dtype):
@@ -88,6 +99,10 @@ def train_modernbert_hybrid_poc(
         Callable[[dict[str, float | int | bool]], None] | None
     ) = None,
     initialization_lock: AbstractContextManager[Any] | None = None,
+    router_builder: HybridRouterBuilder | None = None,
+    router_text_formatter: Callable[[str], str] | None = None,
+    router_display_name: str = "ModernBERT",
+    gradient_accumulation_steps: int = 1,
 ) -> ModernBERTHybridPOCResult:
     """Train safety estimates while using the oracle only as an auxiliary task.
 
@@ -100,12 +115,21 @@ def train_modernbert_hybrid_poc(
     optimizer step, which lets notebooks show live training progress without
     changing checkpoint selection. ``initialization_lock`` may serialize model
     construction when several experiments share one GPU in worker threads.
+
+    The optional builder and text formatter preserve the historical ModernBERT
+    defaults while allowing a controlled architecture ablation to reuse the
+    exact split, target, optimizer, calibration, and checkpoint implementation.
+    For example, notebook 06 supplies a causal Qwen builder and appends a routing
+    sentinel; the loss still contains two independent safety logits rather than
+    a mutually exclusive generated model-name token.
     """
 
     if head_learning_rate is None:
         head_learning_rate = learning_rate * 2
     if epochs <= 0 or batch_size <= 0 or learning_rate <= 0 or head_learning_rate <= 0:
         raise ValueError("epochs, batch_size, and learning_rate must be positive.")
+    if gradient_accumulation_steps <= 0:
+        raise ValueError("gradient_accumulation_steps must be positive.")
     if minimum_epochs <= 0:
         raise ValueError("minimum_epochs must be positive.")
     if early_stopping_patience is not None and early_stopping_patience <= 0:
@@ -138,9 +162,16 @@ def train_modernbert_hybrid_poc(
         dtype=object,
     )
     initialization_context = initialization_lock or nullcontext()
+    effective_builder = router_builder or build_hybrid_router
+    effective_formatter = router_text_formatter or (
+        lambda text: f"classification: {text}"
+    )
+    formatted_texts = np.asarray(
+        [effective_formatter(str(text)) for text in texts], dtype=object
+    )
     with initialization_context:
         seed_everything(config.seed)
-        model, tokenizer = build_hybrid_router(
+        model, tokenizer = effective_builder(
             config,
             nonfallback_count=len(nonfallback_indices),
             model_count=len(panel.models),
@@ -152,7 +183,7 @@ def train_modernbert_hybrid_poc(
     router_input_lengths: list[int] = []
     for start in range(0, len(texts), 64):
         diagnostic_batch = tokenizer(
-            [f"classification: {text}" for text in texts[start : start + 64]],
+            formatted_texts[start : start + 64].tolist(),
             padding=False,
             truncation=False,
         )
@@ -174,13 +205,14 @@ def train_modernbert_hybrid_poc(
         "router_tokens_p50": float(np.quantile(input_lengths, 0.50)),
         "router_tokens_p95": float(np.quantile(input_lengths, 0.95)),
         "router_tokens_max": int(input_lengths.max()),
+        "router_architecture": router_display_name,
     }
 
     def collate(indices: list[int]):
         normalized = np.asarray(indices, dtype=int)
         encoded = encode_router_texts(
             tokenizer,
-            [f"classification: {texts[index]}" for index in normalized],
+            formatted_texts[normalized].tolist(),
             max_input_tokens=config.max_input_tokens,
             truncation_strategy=config.input_truncation_strategy,
             padding=True,
@@ -237,7 +269,10 @@ def train_modernbert_hybrid_poc(
         ],
         weight_decay=config.weight_decay,
     )
-    total_steps = max(1, epochs * len(train_loader))
+    optimizer_steps_per_epoch = math.ceil(
+        len(train_loader) / gradient_accumulation_steps
+    )
+    total_steps = max(1, epochs * optimizer_steps_per_epoch)
     scheduler = get_cosine_schedule_with_warmup(
         optimizer,
         num_warmup_steps=max(1, round(total_steps * config.warmup_ratio)),
@@ -285,6 +320,7 @@ def train_modernbert_hybrid_poc(
         )
 
     skipped_optimizer_steps = 0
+    completed_optimizer_steps = 0
     for epoch in range(1, epochs + 1):
         epoch_started = time.perf_counter()
         model.train()
@@ -292,23 +328,39 @@ def train_modernbert_hybrid_poc(
         train_safety = 0.0
         train_oracle_auxiliary = 0.0
         train_examples = 0
+        optimizer.zero_grad(set_to_none=True)
         for step_in_epoch, (indices, encoded) in enumerate(train_loader, start=1):
-            optimizer.zero_grad(set_to_none=True)
             with _autocast(device, compute_dtype):
                 loss, parts = compute_loss(indices, encoded)
-            scaler.scale(loss).backward()
-            scaler.unscale_(optimizer)
-            torch.nn.utils.clip_grad_norm_(trainable_parameters, config.max_grad_norm)
-            scale_before_step = scaler.get_scale()
-            scaler.step(optimizer)
-            scaler.update()
-            step_was_skipped = scaler.is_enabled() and (
-                scaler.get_scale() < scale_before_step
+            group_start = (
+                (step_in_epoch - 1) // gradient_accumulation_steps
+            ) * gradient_accumulation_steps
+            group_size = min(
+                gradient_accumulation_steps, len(train_loader) - group_start
             )
-            if step_was_skipped:
-                skipped_optimizer_steps += 1
-            else:
-                scheduler.step()
+            scaler.scale(loss / group_size).backward()
+            optimizer_step_performed = (
+                step_in_epoch % gradient_accumulation_steps == 0
+                or step_in_epoch == len(train_loader)
+            )
+            step_was_skipped = False
+            if optimizer_step_performed:
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(
+                    trainable_parameters, config.max_grad_norm
+                )
+                scale_before_step = scaler.get_scale()
+                scaler.step(optimizer)
+                scaler.update()
+                step_was_skipped = scaler.is_enabled() and (
+                    scaler.get_scale() < scale_before_step
+                )
+                if step_was_skipped:
+                    skipped_optimizer_steps += 1
+                else:
+                    scheduler.step()
+                    completed_optimizer_steps += 1
+                optimizer.zero_grad(set_to_none=True)
             train_total += float(loss.detach()) * len(indices)
             train_safety += float(parts["safety"].detach()) * len(indices)
             train_oracle_auxiliary += float(parts["oracle_auxiliary"].detach()) * len(
@@ -332,6 +384,9 @@ def train_modernbert_hybrid_poc(
                         ),
                         "running_train_total_loss": train_total / train_examples,
                         "step_was_skipped": step_was_skipped,
+                        "optimizer_step_performed": optimizer_step_performed,
+                        "completed_optimizer_steps": completed_optimizer_steps,
+                        "optimizer_steps_per_epoch": optimizer_steps_per_epoch,
                     }
                 )
 
@@ -407,7 +462,7 @@ def train_modernbert_hybrid_poc(
             break
 
     if best_state is None:
-        raise RuntimeError("ModernBERT training produced no checkpoint.")
+        raise RuntimeError(f"{router_display_name} training produced no checkpoint.")
     model.load_state_dict(best_state, strict=False)
     model.eval()
     safety_logit_parts = []
@@ -469,6 +524,7 @@ def train_modernbert_hybrid_poc(
         epochs_completed=len(history),
         stopped_early=stopped_early,
         dataset_balanced_sampling=dataset_balanced_sampling,
+        gradient_accumulation_steps=gradient_accumulation_steps,
         training_seconds=time.perf_counter() - started,
     )
 
@@ -541,13 +597,20 @@ def export_modernbert_hybrid_poc(
     safety_loss_weight: float = 1.0,
     oracle_auxiliary_weight: float = 0.25,
     router_overhead_benchmark: dict[str, object] | None = None,
+    router_display_name: str = "ModernBERT hybrid safety router",
+    pooling_strategy: str = "masked_mean",
+    router_text_prefix: str = "classification: ",
+    router_text_suffix: str = "",
+    encoder_reference_compile: bool | None = MODERNBERT_REFERENCE_COMPILE,
     config: RouterConfig = DEFAULT_CONFIG,
 ) -> Path:
     """Save the best checkpoint, policy, and optional router-only timing evidence.
 
-    ``router_overhead_benchmark`` may contain measured ModernBERT latency.  It is
+    ``router_overhead_benchmark`` may contain measured router latency.  It is
     diagnostic metadata only: candidate-model latency remains analytical and the
-    timing does not retroactively alter the frozen validation policy.
+    timing does not retroactively alter the frozen validation policy.  The
+    architecture and text-format fields let the artifact loader distinguish the
+    historical masked-mean ModernBERT from notebook 06's Qwen final-token router.
     """
 
     output_dir = Path(output_dir)
@@ -573,12 +636,15 @@ def export_modernbert_hybrid_poc(
     )
     manifest = {
         "schema_version": 5,
-        "router": "ModernBERT hybrid safety router",
+        "router": router_display_name,
         "deployed_prediction": "fallback-relative replacement safety",
         "oracle_role": "training-only auxiliary loss",
         "encoder_repo": config.encoder_repo,
         "encoder_revision": config.encoder_revision,
-        "encoder_reference_compile": MODERNBERT_REFERENCE_COMPILE,
+        "encoder_reference_compile": encoder_reference_compile,
+        "pooling_strategy": pooling_strategy,
+        "router_text_prefix": router_text_prefix,
+        "router_text_suffix": router_text_suffix,
         "router_max_input_tokens": config.max_input_tokens,
         "router_input_truncation_strategy": config.input_truncation_strategy,
         "model_names": model_names,
@@ -642,6 +708,7 @@ def export_modernbert_hybrid_poc(
             "epochs_completed": result.epochs_completed,
             "stopped_early": result.stopped_early,
             "dataset_balanced_sampling": result.dataset_balanced_sampling,
+            "gradient_accumulation_steps": result.gradient_accumulation_steps,
         },
         "input_diagnostics": result.input_diagnostics,
         "training_seconds": result.training_seconds,

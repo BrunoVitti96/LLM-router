@@ -220,14 +220,15 @@ def test_qwen_tier_v4_notebook_is_safety_only_and_investor_ready():
         ast.parse(source)
 
 
-def test_qwen_tier_v5_notebook_is_clean_parallel_input_experiment():
+def test_qwen_tier_v5_notebook_is_valid_parallel_input_experiment():
     path = Path("notebooks/05_train_modernbert_input_representation_ood_v5.ipynb")
     notebook = json.loads(path.read_text(encoding="utf-8"))
     assert notebook["nbformat"] == 4
-    assert "widgets" not in notebook["metadata"]
     code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
-    assert all(cell["execution_count"] is None for cell in code_cells)
-    assert all(not cell["outputs"] for cell in code_cells)
+    has_retained_results = any(cell["outputs"] for cell in code_cells)
+    if not has_retained_results:
+        assert "widgets" not in notebook["metadata"]
+        assert all(cell["execution_count"] is None for cell in code_cells)
 
     full_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
     required_contract = (
@@ -270,6 +271,56 @@ def test_qwen_tier_v5_notebook_is_clean_parallel_input_experiment():
 
     assert notebook["cells"][-1]["cell_type"] == "code"
     assert "demo.launch" in "".join(notebook["cells"][-1]["source"])
+
+    for cell in code_cells:
+        source = "".join(cell["source"])
+        if source.lstrip().startswith("%"):
+            continue
+        ast.parse(source)
+
+
+def test_qwen_tier_v6_notebook_is_clean_last_token_ablation():
+    path = Path("notebooks/06_train_qwen15_last_token_router_ood_v6.ipynb")
+    notebook = json.loads(path.read_text(encoding="utf-8"))
+    assert notebook["nbformat"] == 4
+    assert "widgets" not in notebook["metadata"]
+    code_cells = [cell for cell in notebook["cells"] if cell["cell_type"] == "code"]
+    assert all(cell["execution_count"] is None for cell in code_cells)
+    assert all(not cell["outputs"] for cell in code_cells)
+
+    full_text = "\n".join("".join(cell["source"]) for cell in notebook["cells"])
+    required_contract = (
+        "V6 Qwen2.5-1.5B final-token router OOD experiment",
+        'RUN_ID = "qwen25_v6_qwen_router_ood_seed_42"',
+        'QWEN_ROUTER_REPO = CANDIDATES["Qwen2.5-1.5B"]',
+        '"pooling_strategy": QWEN_LAST_TOKEN_POOLING',
+        "QWEN_ROUTER_TEXT_SUFFIX,",
+        '"max_input_tokens": MAX_INPUT_TOKENS',
+        "MICRO_BATCH_SIZE = 1",
+        "GRADIENT_ACCUMULATION_STEPS = 4",
+        '"effective_batch_size":',
+        '"oracle_auxiliary_weight": 0.0',
+        "minimum validation safety loss",
+        "build_qwen_last_token_router",
+        "format_qwen_router_text",
+        "gradient_accumulation_steps=GRADIENT_ACCUMULATION_STEPS",
+        "replacement_safety_targets",
+        "within_dataset_roc_auc",
+        "V5_SEED42_REFERENCE",
+        'router_name="qwen15_last_token_router"',
+        "qwen_router_overhead_comparison.csv",
+        "v6_qwen_last_token_contract.json",
+        "development comparison",
+        "never generates",
+        "create_gradio_demo",
+        "demo.launch",
+    )
+    assert all(item in full_text for item in required_contract)
+    assert full_text.count("run_public_benchmark(") == 1
+    assert full_text.count("train_modernbert_hybrid_poc(") == 1
+    assert ".generate(" not in full_text
+    assert "ThreadPoolExecutor" not in full_text
+    assert notebook["metadata"]["v6_contract"]["development_comparison"] is True
 
     for cell in code_cells:
         source = "".join(cell["source"])

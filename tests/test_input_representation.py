@@ -61,6 +61,19 @@ def test_prefix_and_head_tail_keep_different_context_with_equal_budget():
     assert head_tail["attention_mask"] == [[1, 1, 1, 1, 1]]
 
 
+def test_prefix_with_last_preserves_one_final_sentinel_token():
+    encoded = encode_router_texts(
+        FakeTokenizer(),
+        ["1 2 3 4 5 6"],
+        max_input_tokens=5,
+        truncation_strategy="prefix_with_last",
+        return_tensors=None,
+    )
+
+    assert encoded["input_ids"] == [[101, 1, 2, 3, 102]]
+    assert encoded["attention_mask"] == [[1, 1, 1, 1, 1]]
+
+
 def test_input_representation_rejects_unknown_strategy():
     with pytest.raises(ValueError, match="Unknown truncation strategy"):
         encode_router_texts(

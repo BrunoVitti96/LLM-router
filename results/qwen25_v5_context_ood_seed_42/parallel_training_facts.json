@@ -1,0 +1,10 @@
+{
+  "requested": true,
+  "enabled": true,
+  "gpu": "Tesla T4",
+  "total_gib": 14.56317138671875,
+  "free_gib_before_training": 14.46075439453125,
+  "free_fraction_before_training": 0.9929673977276061,
+  "workers": 3,
+  "batch_size_per_variant": 4
+}

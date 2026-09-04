@@ -1,0 +1,149 @@
+{
+  "schema_version": 5,
+  "single_run_passed": false,
+  "study_status": "single_run_failed",
+  "poc_passed": false,
+  "failure_reasons": [
+    "Sealed-test quality-loss rate exceeded its UCL gate.",
+    "Sealed-test guarded-dataset quality missed its worst-group LCB gate."
+  ],
+  "benchmark_fingerprint_sha256": "168f7e1e3e09106f64d363be5b2dc88401f55a12bd1a77f7a348cdbb8721d6ef",
+  "success_criteria": {
+    "minimum_quality_retention": 0.98,
+    "validation_quality_margin": 0.01,
+    "validation_quality_target": 0.99,
+    "minimum_macro_quality_retention": 0.98,
+    "maximum_quality_loss_rate_ucl": 0.025,
+    "minimum_routed_safety_precision_lcb": 0.9,
+    "minimum_guarded_dataset_quality_retention_lcb": 0.9,
+    "minimum_guarded_dataset_prompts": 100,
+    "conservative_router_overhead_s": 0.02,
+    "minimum_consecutive_feasible_thresholds": 2,
+    "one_sided_confidence": 0.95,
+    "requires_positive_net_resource_savings": true,
+    "requires_positive_conservative_resource_savings": true,
+    "requires_nontrivial_routing": true,
+    "reports_macro_dataset_retention": true,
+    "reports_quality_loss_rate_ucl": true,
+    "reports_routed_safety_precision_lcb": true,
+    "reports_safe_opportunity_recall": true,
+    "reports_full_candidate_probabilities": true,
+    "requires_threshold_stability": true
+  },
+  "objective": "latency",
+  "router_name": "modernbert_qwen_tier_router",
+  "selected_setup": "prefix_1024",
+  "fallback_model": "Qwen2.5-7B",
+  "selected_threshold": 0.9,
+  "router_active": true,
+  "split": {
+    "mode": "dataset_ood",
+    "random_grouping": "normalized_prompt_sha256",
+    "train_datasets": [
+      "bbh_boolean_expressions",
+      "bbh_causal_judgement",
+      "bbh_date_understanding",
+      "bbh_disambiguation_qa",
+      "bbh_hyperbaton",
+      "bbh_logical_deduction_seven_objects",
+      "bbh_logical_deduction_three_objects",
+      "bbh_navigate",
+      "bbh_object_counting",
+      "bbh_penguins_in_a_table",
+      "bbh_reasoning_about_colored_objects",
+      "bbh_ruin_names",
+      "bbh_salient_translation_error_detection",
+      "bbh_snarks",
+      "bbh_temporal_sequences",
+      "bbh_tracking_shuffled_objects_seven_objects",
+      "gpqa_diamond",
+      "math_geometry_hard",
+      "math_intermediate_algebra_hard",
+      "math_num_theory_hard",
+      "math_prealgebra_hard",
+      "mmlu_pro",
+      "musr_object_placements"
+    ],
+    "validation_datasets": [
+      "bbh_logical_deduction_five_objects",
+      "bbh_movie_recommendation",
+      "bbh_tracking_shuffled_objects_five_objects",
+      "bbh_tracking_shuffled_objects_three_objects",
+      "ifeval",
+      "math_precalculus_hard",
+      "musr_murder_mysteries"
+    ],
+    "test_datasets": [
+      "bbh_formal_fallacies",
+      "bbh_geometric_shapes",
+      "bbh_sports_understanding",
+      "bbh_web_of_lies",
+      "math_algebra_hard",
+      "math_counting_and_prob_hard",
+      "musr_team_allocation"
+    ]
+  },
+  "scenario": {
+    "name": "qwen25-three-tier-analytical-latency-poc",
+    "as_of": "2026-08-21",
+    "network_s": 0.0,
+    "router_overhead_s": 0.004,
+    "notes": "Published Qwen answer evidence; analytical BF16 candidate latency only.",
+    "latency_method": "analytical",
+    "hardware": {
+      "effective_tflops": 60.0,
+      "memory_bandwidth_gbps": 900.0,
+      "fixed_model_overhead_s": 0.015
+    },
+    "output_length_policy": {
+      "base_tokens": 24.0,
+      "tokens_per_prompt_token": 0.2,
+      "minimum_tokens": 16,
+      "maximum_tokens": 256
+    },
+    "models": {
+      "Qwen2.5-1.5B": {
+        "input_price_per_million": 0.0,
+        "output_price_per_million": 0.0,
+        "ttft_s": null,
+        "output_tokens_per_second": null,
+        "queue_s": 0.0,
+        "parameters_billions": 1.54,
+        "active_parameters_billions": 1.54,
+        "architecture": "autoregressive",
+        "weight_bits": 16,
+        "diffusion_steps": 1,
+        "diffusion_block_size": 1,
+        "architecture_factor": 1.0
+      },
+      "Qwen2.5-3B": {
+        "input_price_per_million": 0.0,
+        "output_price_per_million": 0.0,
+        "ttft_s": null,
+        "output_tokens_per_second": null,
+        "queue_s": 0.0,
+        "parameters_billions": 3.09,
+        "active_parameters_billions": 3.09,
+        "architecture": "autoregressive",
+        "weight_bits": 16,
+        "diffusion_steps": 1,
+        "diffusion_block_size": 1,
+        "architecture_factor": 1.0
+      },
+      "Qwen2.5-7B": {
+        "input_price_per_million": 0.0,
+        "output_price_per_million": 0.0,
+        "ttft_s": null,
+        "output_tokens_per_second": null,
+        "queue_s": 0.0,
+        "parameters_billions": 7.61,
+        "active_parameters_billions": 7.61,
+        "architecture": "autoregressive",
+        "weight_bits": 16,
+        "diffusion_steps": 1,
+        "diffusion_block_size": 1,
+        "architecture_factor": 1.0
+      }
+    }
+  }
+}

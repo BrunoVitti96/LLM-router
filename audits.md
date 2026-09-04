@@ -8,6 +8,56 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-09-04 — V6 Qwen2.5-1.5B final-token router ablation created
+
+The completed V5 dataset-OOD seed-42 result reduced router truncation from
+64.26% at 512 tokens to 11.74% at 1,024 tokens, but the selected prefix router's
+validation ROC-AUC remained only 0.5690. Its test allocation was almost entirely
+dataset-level: 0 of 1,000 BBH prompts, all 423 math prompts, and 178 of 250 MUSR
+prompts were routed. Although test quality increased by 12 net answers and
+conservative analytical savings were 34.31%, the 2.88% harm-rate upper bound
+exceeded the 2.5% gate and the 81.33% guarded-dataset retention lower bound
+missed the 90% gate. The single run therefore failed.
+
+Notebook 06 was added to test a new representation hypothesis without changing
+the evidence or policy objective. It loads `Qwen/Qwen2.5-1.5B-Instruct` as the
+router, appends Qwen's existing one-token `\n<|endoftext|>` sentinel, and applies the existing two independent
+safety heads to the final non-padding hidden state. It never calls generation
+and does not train a vocabulary softmax to emit one model name. Technically, for
+candidate $m$ it still estimates
+
+$$
+p_m=\sigma(w_m^\top h_{\mathrm{route}}+b_m)
+$$
+
+and the deterministic analytical selector chooses the fastest candidate above
+the calibrated threshold. Class-balanced fallback-relative BCE, zero oracle
+coefficient, rank-4/alpha-8 LoRA, five complete epochs, validation-best
+checkpointing, the first 1,023 prompt tokens plus the preserved sentinel, split,
+seed, calibration, gates, and
+analytical candidate scenario remain fixed.
+
+The 1.5B router is much larger than ModernBERT, so V6 uses gradient checkpointing
+and micro-batch size one with four-step gradient accumulation. In numerical
+terms, four micro-batches produce one effective batch-four optimizer update;
+5,274 seed-42 training prompts therefore produce
+$\lceil5{,}274/4\rceil=1{,}319$ updates per epoch. Shared training code gained an
+optional router builder/text formatter and gradient accumulation, with defaults
+that preserve every existing ModernBERT caller. The artifact manifest now
+records pooling and prompt-wrapper identity, and the runtime loader reconstructs
+either masked-mean ModernBERT or final-token Qwen.
+
+V6 adds probability-span and within-dataset ROC-AUC diagnostics, a frozen V5
+comparison table, standalone Qwen-router timing, and a reconstructable ZIP. The
+4 ms and 20 ms overhead assumptions remain frozen only for controlled policy
+comparison; measured Qwen p50/p95 are compared with break-even separately, and
+no KV-cache reuse is assumed. Because V5 seed-42 outcomes already motivated this
+change, V6 seed 42 is explicitly development evidence rather than a fresh sealed
+claim. Untouched seeds or new task families are required for confirmation.
+The notebook regression accepts V5's retained executed evidence but still
+requires widget-free metadata whenever V5 is regenerated output-free; the new
+V6 notebook is always checked as clean and output-free before distribution.
+
 ## 2026-09-01 — V5 export used the shared oracle coefficient
 
 A notebook-05 execution reached the artifact cell and raised

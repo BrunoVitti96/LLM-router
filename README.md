@@ -1,26 +1,21 @@
-# Calibrated ModernBERT router for three Qwen capacity tiers
+# Calibrated safety routers for three Qwen capacity tiers
 
-The recommended v5 diagnostic proof of concept loads reproducible, published per-example
+The current V6 architecture diagnostic loads reproducible, published per-example
 quality evidence for three separated Qwen2.5 tiers—1.54B, 3.09B, and 7.61B
-parameters—then
-trains
-[`nomic-ai/modernbert-embed-base`](https://huggingface.co/nomic-ai/modernbert-embed-base)
-with lightweight LoRA adapters to estimate whether a faster candidate can
-preserve the quality of a strong fallback for each prompt. V5 keeps v4's
-class-balanced replacement-safety loss, trains rank-4 LoRA for all five epochs,
-and restores the epoch with the lowest validation safety loss. It compares the
-old 512-token prefix with a 1,024-token prefix and a 1,024-token head-plus-tail
-representation. The oracle head
-and loss implementation remain present for compatibility, but their coefficient
-is exactly zero. A deterministic analytical estimator selects the lowest-latency
-candidate predicted safe.
+parameters—then trains `Qwen/Qwen2.5-1.5B-Instruct` as a causal, final-token
+safety router. Qwen's fixed, one-token `<|endoftext|>` sentinel follows the prompt, and a
+dedicated two-logit head reads its last hidden state. V6 keeps V5's
+class-balanced replacement-safety loss, rank-4 LoRA, five complete epochs,
+validation-best checkpoint, calibration, thresholds, dataset split, and policy
+gates. The inactive oracle coefficient remains exactly zero. A deterministic
+analytical estimator still selects the lowest-latency candidate predicted safe.
 
-ModernBERT does **not** predict latency and does **not** directly predict the
-final model. Candidate latency comes from model size, generation architecture,
-precision, prompt size, and explicit hardware assumptions. No candidate LLM is
-loaded or timed in v5. Quality comes from pinned Hugging Face Open LLM
-Leaderboard detail datasets; published runtime is neither a routing target nor
-used by the selector.
+Neither router predicts latency or directly predicts the final model. Candidate
+latency comes from model size, generation architecture, precision, prompt size,
+and explicit hardware assumptions. V6 loads Qwen2.5-1.5B only as the router and
+does not generate candidate answers; candidate generation latency remains
+analytical. Quality comes from pinned Hugging Face Open LLM Leaderboard detail
+datasets; published runtime is neither a routing target nor used by the selector.
 
 The project is an analytical-latency feasibility experiment, not a claim about
 measured production latency.
@@ -35,24 +30,24 @@ without doing worse than the trusted fallback?" If its calibrated confidence is
 high enough and the analytical latency model predicts at least a 2% speedup, it
 uses the fastest eligible alternative. Otherwise it safely uses the fallback.
 
-Technically, ModernBERT predicts two separate fallback-relative safety
+Technically, the learned router predicts two separate fallback-relative safety
 probabilities, one for each non-fallback Qwen tier. The selector combines those
-probabilities with analytical latency estimates. V5 trains three input variants,
-prints loss after every optimizer mini-batch, restores each variant's
-best of five validation checkpoints, selects one variant using validation only,
-freezes one stable threshold
-region, and then opens the sealed test exactly once. The test is successful only if
-conservative quality, subgroup, harm, calibration, threshold-stability, and
-latency-overhead gates all pass.
+probabilities with analytical latency estimates. V6 trains one 1,024-token
+causal Qwen router, restores its best of five validation checkpoints, freezes a
+stable validation threshold region, and evaluates the same seed-42 partition for
+a direct V5 comparison. The test is successful only if conservative quality,
+subgroup, harm, calibration, threshold-stability, and latency-overhead gates all
+pass.
 
-The v5 notebook provides random and dataset-OOD modes at
+The V5 and V6 notebooks provide random and dataset-OOD modes at
 seeds 42, 43, and 44. It deterministically keeps at most 300 aligned prompts from
 each of 37 non-overlapping published tasks: at most 11,100 prompts and 33,300
 prompt-model outcomes, reused across split seeds.
-One Colab session compares all three representations for one named split and exports one ZIP. ModernBERT
-batch-one overhead is measured on the active Colab GPU. Candidate generation is
-not timed for routing, so candidate latency remains analytical. The router timing
-is diagnostic and cannot retroactively change the frozen 4 ms and 20 ms gates.
+One V6 Colab session trains one Qwen router for one named split and exports one
+ZIP. Batch-one router overhead is measured on the active Colab GPU. Candidate
+generation is not timed, so candidate latency remains analytical. The router
+timing is diagnostic and cannot retroactively change the frozen 4 ms and 20 ms
+comparison gates.
 
 For a simplified numerical example, suppose the fallback answers 80 of 100
 prompts correctly. A routed policy answers 79 correctly, so its point-estimate
@@ -68,9 +63,9 @@ recall, and conservative analytical savings. V4 treats that result as explorator
 model-selection evidence and starts a new versioned safety-only study rather than
 silently changing the remaining v3 runs after a sealed test was observed.
 
-## Current evidence: notebook 04 exposes an OOD generalization failure
+## Historical V4 evidence: notebook 04 exposed an OOD generalization failure
 
-The latest completed run is the dataset-OOD seed-42 execution saved in
+The predecessor dataset-OOD seed-42 execution saved in
 [`04_train_modernbert_qwen_tiers_safety_only_v4.ipynb`](notebooks/04_train_modernbert_qwen_tiers_safety_only_v4.ipynb).
 Training loss fell from 0.2220 to 0.2023, while validation loss moved
 0.2390, 0.2414, 0.2360, 0.2408, and 0.2411. Epoch 3 was correctly retained.
@@ -90,7 +85,7 @@ test prompts, estimated 28.24% analytical savings at 20 ms overhead, and finishe
 eight answers ahead of fallback, but still failed its macro-dataset gate. Neither
 single seed supports a production or universal-generalization claim.
 
-## V5 status: first execution exposed a compile/thread incompatibility
+## V5 result and the controlled V6 architecture test
 
 [`05_train_modernbert_input_representation_ood_v5.ipynb`](notebooks/05_train_modernbert_input_representation_ood_v5.ipynb)
 holds the loss, LoRA capacity, split, seed, calibration, thresholds, gates, and
@@ -102,73 +97,49 @@ five-epoch checkpoint rule fixed while comparing:
 | `prefix_1024` | 1,024 | first 1,024 tokens | tests token budget alone |
 | `head_tail_1024` | 1,024 | prompt beginning and ending | tests whether discarded tail content matters |
 
-For a 1,600-token encoded prompt, `prefix_512` discards 1,088 tokens,
-`prefix_1024` discards 576, and `head_tail_1024` keeps approximately 512 tokens
-from each end. Validation selects the representation; only that winner is
-allowed to open the sealed test. V5 has no results yet, so no chart or claim in
-the notebook should be presented as observed evidence until it is executed and
-its ZIP is retained.
+The completed dataset-OOD seed-42 V5 run selected `prefix_1024`. Increasing the
+budget from 512 to 1,024 tokens reduced truncation from 64.26% to 11.74%, but
+validation ROC-AUC improved only from 0.5616 to 0.5690. `head_tail_1024` had the
+best validation loss, 0.2386, but the selected prefix produced the highest
+validation conservative savings, 11.54%, while passing all validation gates.
 
-The first Colab attempt reached the fifth training epoch but stopped before
-representation selection with `Detected that you are using FX to symbolically
-trace a dynamo-optimized function`. The traceback entered ModernBERT's optional
-compiled MLP from one of the three worker threads. This was an execution-backend
-failure, not a failed quality gate: the sealed test was never opened and no v5
-result was produced.
+The sealed V5 test routed 35.92% of 1,673 prompts and produced 49 gains versus
+37 losses, so observed quality rose from 42.68% to 43.40%. Its overall quality
+retention lower bound was 99.54%, and conservative analytical savings were
+34.31%. The run nevertheless failed correctly: the quality-loss-rate upper
+bound was 2.88%, above 2.5%, and the guarded-dataset retention lower bound was
+81.33%, below 90%. All 423 math prompts were routed, none of 1,000 BBH prompts
+were routed, and 178 of 250 MUSR prompts were routed. This near dataset-level
+allocation shows that extra context did not solve instance-level OOD ranking.
 
-The router now loads ModernBERT with `reference_compile=False` for training and
-artifact inference. In plain language, the three workers use the ordinary eager
-encoder instead of asking PyTorch to compile encoder fragments concurrently.
-Technically, Transformers 4.53.1 otherwise enables `torch.compile(dynamic=True)`
-when Triton is present, while PyTorch Dynamo/FX compilation uses process-global
-state that is unsafe under this threaded workload. The eager path evaluates the
-same attention, MLP, pooling, LoRA, and heads; it trades the optional compile
-speedup for a stable run. With three variants and five epochs, the experiment
-still performs $3\times5=15$ model-epochs and retains one validation-best
-checkpoint per variant. A clean rerun is required before claiming results.
+[`06_train_qwen15_last_token_router_ood_v6.ipynb`](notebooks/06_train_qwen15_last_token_router_ood_v6.ipynb)
+tests the next controlled hypothesis. Qwen2.5-1.5B keeps the first 1,023 tokens
+plus a final `<|endoftext|>` sentinel and uses that sentinel state instead of
+masked-mean encoder pooling. It does
+not generate a model-name token: the two independent safety logits remain
 
-V5 requests three concurrent workers on one GPU because the v4 run left memory
-headroom. A coarse preflight requires at least 14 GiB total GPU memory and 80%
-free memory; otherwise it runs sequentially. Each parallel worker uses batch
-size 4 and model construction is serialized to avoid simultaneous download and
-initialization spikes. Parallelism reduces wall-clock time only if compute and
-memory bandwidth remain available—it does not make one GPU equivalent to three.
-If CUDA still reports out-of-memory, restart the runtime, set
-`PARALLEL_TRAINING_REQUESTED=False`, and rerun.
+$$
+s_m=w_m^\top h_{\text{route}}+b_m,\qquad p_m=\sigma(s_m).
+$$
 
-The v5 artifact contract records `modernbert_reference_compile=false`. This
-switch changes only the encoder execution backend; it does not change the
-safety labels, class-balanced BCE, LoRA rank, optimizer, calibration, policy
-gates, or analytical latency model.
+Micro-batch size one plus four-step gradient accumulation preserves V5's
+effective batch size of four. For example, four micro-batches produce one
+optimizer update, so 5,274 training prompts produce
+$\lceil5{,}274/4\rceil=1{,}319$ updates per epoch. Gradient checkpointing reduces
+activation memory, but a Tesla T4 run will still be substantially slower than
+ModernBERT; an A100 is preferred.
 
-The export cell reads the inactive oracle coefficient from the shared
-`V5_INPUT_CONTRACT`, not from a representation entry. Representation entries
-contain only token budget and truncation strategy. For example,
-`head_tail_1024` supplies `1024` and `head_tail`, while the shared contract
-supplies the unchanged oracle coefficient `0.0`. This prevents export from
-raising `KeyError: 'oracle_auxiliary_weight'` after a completed run.
-
-The shared safety-only training contract is:
-
-| Contract item | V5 value | Practical meaning |
-|---|---:|---|
-| Active loss | safety BCE only | Directly predicts fallback-relative safety |
-| Oracle coefficient | 0.0 | Oracle code exists but supplies zero gradient |
-| LoRA rank / alpha | 4 / 8 | Uses the winning v3 capacity setup |
-| Epochs | 5 | Every epoch runs; early stopping is disabled |
-| Training log | every optimizer mini-batch | Preserves the v4 live-loss contract; lines name their variant |
-| Checkpoint | minimum validation safety loss | Later epochs cannot overwrite a better earlier model |
-| Default split | dataset-OOD seed 42 | Tests transfer to unseen tasks |
-
-For example, if validation safety loss is lowest at epoch 3 and rises from
-0.205 at epoch 3 to 0.219 at epoch 5, the exported router uses epoch 3 even
-though the training loop completed all five epochs.
+V6 also reports within-dataset ROC-AUC and probability spans. A better global
+AUC is insufficient if every prompt in one dataset still receives nearly the
+same probability. The default seed-42 V6 run is a development comparison because
+V5's seed-42 test has already been inspected. Untouched seeds or new task
+families are required for confirmation.
 
 ## Routing logic
 
 ```mermaid
 flowchart LR
-    P["Prompt + prompt-token count"] --> M["Declared ModernBERT setups"]
+    P["Prompt + prompt-token count"] --> M["Declared learned-router setup"]
     M --> R["Raw safety logits per alternative"]
     R --> C["Per-candidate Platt calibration"]
     P --> T["Analytical latency estimator"]
@@ -679,19 +650,18 @@ representation test from being mistaken for a continuation of either contract.
 
 ## Train entirely in Google Colab
 
-[Open notebook 05 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/poc/notebooks/05_train_modernbert_input_representation_ood_v5.ipynb)
+[Open notebook 06 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/poc/notebooks/06_train_qwen15_last_token_router_ood_v6.ipynb)
 
-Notebook 05 and its companion Python source currently live on the `poc` branch.
-The setup cell explicitly checks out that branch and verifies that
-`src/llm_router/qwen_evidence.py` exists before importing anything. This avoids
-mixing a new notebook with older `develop` code. For example, a notebook that
-expects `qwen_evidence.py` but installs a branch without it fails before any of
-the three Qwen datasets or the ModernBERT router can be used.
+Notebook 06 and its companion source must exist together on the `poc` branch.
+The setup cell verifies both `qwen_evidence.py` and
+`models/qwen_last_token_router.py` before importing. This prevents a notebook
+that expects final-token pooling from silently running older masked-mean code.
 
 1. Select **Runtime → Change runtime type → GPU**.
-2. Leave `RUN_ID = "qwen25_v5_context_ood_seed_42"` for the first diagnostic OOD
-   run and execute every
-   cell from top to bottom. Accept access to the three auto-gated Open LLM
+   A Tesla T4 is the minimum practical target; an A100 is preferred.
+2. Leave `RUN_ID = "qwen25_v6_qwen_router_ood_seed_42"` for the direct V5
+   development comparison and execute every cell from top to bottom. Accept
+   access to the three auto-gated Open LLM
    Leaderboard detail datasets and add a read token named `HF_TOKEN` to Colab
    secrets. In Colab, click the key icon in the left sidebar, create the secret
    with that exact name, paste the token as its value, and enable notebook
@@ -702,37 +672,35 @@ the three Qwen datasets or the ModernBERT router can be used.
    has not accepted that dataset's conditions or the token lacks read access to
    gated repositories; accept all three pages using the same account and use a
    read-capable token.
-3. The notebook downloads pinned JSONL answer evidence and one Qwen tokenizer for
-   token counting. It never downloads or runs Qwen model weights.
+3. The notebook downloads the pinned JSONL answer evidence and the
+   Qwen2.5-1.5B weights used only as the router. It never generates candidate
+   answers; candidate latency remains analytical.
 4. Confirm the displayed correctness audit has only binary outcomes and one row
    for every task/model/metric combination. Any incomplete or ambiguous panel
    fails before router training.
-5. Confirm the GPU preflight reports whether the three variants will run in
-   parallel. Let all variants complete five epochs; each prints every
-   optimizer-step loss. Confirm each retained checkpoint is its
-   minimum-validation-loss epoch and that validation alone selects the winner.
-6. Inspect the representation dashboard: three learning curves, truncation rate
-   versus best validation loss, validation routing/savings by representation,
-   and the selected representation's held-out-domain map.
+5. Confirm micro-batch size one and four-step gradient accumulation produce an
+   effective batch size of four. Let all five epochs complete and confirm the
+   minimum-validation-loss checkpoint is restored.
+6. Inspect validation ROC-AUC, unsafe average precision, probability spans, and
+   within-dataset ROC-AUC. Improvement should occur inside datasets, not only
+   through recognizing their templates.
 7. Run the final cell and use its Gradio share link to demonstrate safety
    probability, fallback use, analytical candidate latency, and estimated savings.
-8. Download the generated `qwen25_v5_context_ood_seed_42` ZIP. First decide
-   whether the longer/head-tail representation materially improved validation;
-   then repeat seeds 43 and 44 before making a stable generalization claim.
+8. Download the generated `qwen25_v6_qwen_router_ood_seed_42` ZIP. Compare it
+   with the embedded V5 reference, then use untouched seeds or new task families
+   for confirmation.
 
 The notebook downloads three pinned Open LLM Leaderboard detail repositories,
 aligns their 37 non-overlapping task files, deterministically keeps at most 300
 prompts per task, proves completion-length leakage is absent, audits prompt-content
 groups, runs validation-only sensitivity scenarios, trains and calibrates
-ModernBERT with per-step training logs and epoch-level validation for
-all five epochs, and restores each variant's best validation-safety checkpoint.
-It freezes one representation
-with a validation safety margin and
-threshold-stability rule, opens the sealed test once, and exports a
-reconstructable artifact plus scored evidence. It then measures ModernBERT only
-and launches a demo whose candidate latency remains analytical. Notebook 05 is
-deliberately output-free in Git and has no results yet. The current working copy
-of notebook 04 contains executed dataset-OOD seed-42 outputs for inspection.
+the final-token Qwen router for all five epochs, and restores its best
+validation-safety checkpoint. It freezes the threshold with the same validation
+margin and stability rule, evaluates the development test, and exports a
+reconstructable artifact plus scored evidence. It then measures only the Qwen
+router forward pass and launches a demo whose candidate latency remains
+analytical. Notebook 06 is deliberately output-free in Git and has no result
+until it is executed.
 Embedded notebook output is not a substitute for the reconstructable ZIP, which
 remains the authoritative run record and should be preserved separately.
 
@@ -788,21 +756,30 @@ The report directory contains:
   budget, truncation strategy, truncation rate, loss, routing, and savings;
 - `parallel_training_facts.json`: preflight memory facts, worker count, and
   per-variant batch size;
+- `v6_qwen_last_token_contract.json`: causal-router revision, sentinel,
+  prefix-with-last strategy, effective batch, checkpoint, and result status;
+- `within_dataset_discrimination.csv`: candidate safety prevalence, probability
+  span, and within-dataset ROC-AUC where both labels exist;
+- `v5_v6_validation_comparison.csv` and `v5_v6_test_comparison.csv`: the frozen
+  descriptive V5 seed-42 reference beside the V6 result;
 - `validation_sensitivity.csv`: validation-only oracle headroom across analytical
   hardware and output-length assumptions;
 - `test_router_overhead_sensitivity.csv`: the frozen test policy under several
   router-overhead assumptions;
-- `modernbert_overhead_benchmark.json`: named-hardware ModernBERT-only timing
+- `modernbert_overhead_benchmark.json` or `qwen_router_overhead_benchmark.json`:
+  named-hardware learned-router timing
   contract and model-only/end-to-end distributions;
-- `modernbert_overhead_samples.csv`: request-level router timing samples;
-- `modernbert_overhead_comparison.csv`: 4 ms, 20 ms, measured p50/p95, and the
+- `modernbert_overhead_samples.csv` or `qwen_router_overhead_samples.csv`:
+  request-level router timing samples;
+- `modernbert_overhead_comparison.csv` or
+  `qwen_router_overhead_comparison.csv`: 4 ms, 20 ms, measured p50/p95, and the
   frozen policy's break-even overhead;
 - `test_decisions.parquet`: sealed-test prompt-level decisions;
 - `experiment_manifest.json`: analytical assumptions, benchmark fingerprint,
   threshold-stability contract, and explicit single-run status;
-- `modernbert_router/training_history.csv`;
-- `modernbert_router/calibration_diagnostics.csv`;
-- `modernbert_router/input_diagnostics.json`;
+- `<selected_router>/training_history.csv`;
+- `<selected_router>/calibration_diagnostics.csv`;
+- `<selected_router>/input_diagnostics.json`;
 - exported Platt parameters, LoRA adapter, heads, tokenizer, and router manifest.
 
 The schema-v5 `test_decisions.parquet` also stores
@@ -906,24 +883,27 @@ notebooks/
 ├── 02_train_modernbert_hybrid_poc.ipynb   # executed historical 7B/8B run
 ├── 03_train_modernbert_qwen_tiers_poc.ipynb # historical three-setup ablation
 ├── 04_train_modernbert_qwen_tiers_safety_only_v4.ipynb # executed OOD diagnosis
-└── 05_train_modernbert_input_representation_ood_v5.ipynb # recommended input test
+├── 05_train_modernbert_input_representation_ood_v5.ipynb # executed input test
+└── 06_train_qwen15_last_token_router_ood_v6.ipynb # causal-router test
 
 scripts/
 ├── build_v4_notebook.py        # deterministic v4 notebook builder
-└── build_v5_notebook.py        # deterministic output-free v5 notebook builder
+├── build_v5_notebook.py        # deterministic output-free v5 notebook builder
+└── build_v6_notebook.py        # deterministic output-free v6 notebook builder
 
 src/llm_router/
 ├── analytical_latency.py       # measurement-free latency equations
 ├── input_representation.py     # prefix and head-tail router tokenization
 ├── experiment_plan.py          # historical CLI/notebook-02 schema-v5 presets
-├── router_overhead.py          # ModernBERT-only target-hardware timing
+├── router_overhead.py          # learned-router target-hardware timing
 ├── hybrid_inference.py         # analytical selector and Gradio demo runtime
 ├── oracle.py                   # balanced safety and auxiliary oracle losses
 ├── modernbert_poc.py           # training, calibration, and artifact export
 ├── experiment_comparison.py    # validation-only setup leaderboard
 ├── public_benchmark.py         # policy selection and sealed evaluation
 ├── benchmark_cli.py            # optional command-line driver
-└── models/modernbert_router.py # ModernBERT + LoRA heads
+├── models/modernbert_router.py # ModernBERT + LoRA heads
+└── models/qwen_last_token_router.py # causal final-token Qwen + LoRA heads
 
 docs/
 ├── COLAB_RUNBOOK.md            # one-run-per-ZIP execution order
