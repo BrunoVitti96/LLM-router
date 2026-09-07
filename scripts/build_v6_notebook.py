@@ -67,6 +67,14 @@ Choose a GPU runtime.  A Tesla T4 is the minimum practical target; an A100 is
 strongly preferred because five epochs over 1,024-token prompts are expensive.
 The notebook downloads Qwen2.5-1.5B once as the router.  It never generates new
 candidate answers—the benchmark outcomes remain the pinned published records.
+
+The Qwen router casts its final hidden state to each classifier head's dtype
+before projection, so FP16/BF16 encoder output also works during inference
+without autocast. For example, FP16 `[4, 4]` becomes FP32 `[4, 4]` and a
+unit-weight, zero-bias head still returns `8`. This fixes the post-training
+`Half and Float` error. Restart the runtime and run from setup after syncing
+the corrected `src/llm_router/models/qwen_last_token_router.py` to the `poc`
+branch fetched below; a notebook update alone does not update remote source.
 """
 )
 

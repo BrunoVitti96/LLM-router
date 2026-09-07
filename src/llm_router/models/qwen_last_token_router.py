@@ -46,9 +46,17 @@ class QwenLastTokenRouter(HybridModernBERTRouter):
         batch_indices = torch.arange(hidden.shape[0], device=hidden.device)
         pooled = hidden[batch_indices, final_indices]
         pooled = self.dropout(pooled)
+        # The encoder can return FP16/BF16 while the heads remain FP32.
+        # Match each head at this boundary so calibration, timing, and demo
+        # inference also work without an autocast context. For example,
+        # FP16 [4, 4] becomes FP32 [4, 4], preserving a unit-weight logit of 8.
         return {
-            "safety_logits": self.safety_head(pooled),
-            "oracle_logits": self.oracle_head(pooled),
+            "safety_logits": self.safety_head(
+                pooled.to(dtype=self.safety_head.weight.dtype)
+            ),
+            "oracle_logits": self.oracle_head(
+                pooled.to(dtype=self.oracle_head.weight.dtype)
+            ),
         }
 
 

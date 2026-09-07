@@ -1,5 +1,6 @@
 from types import SimpleNamespace
 
+import pytest
 import torch
 
 from llm_router.config import DEFAULT_CONFIG
@@ -9,20 +10,27 @@ from llm_router.models import qwen_last_token_router
 class PositionEncoder(torch.nn.Module):
     """Expose token positions so the selected pooling position is observable."""
 
+    def __init__(self, dtype=torch.float32):
+        super().__init__()
+        self.dtype = dtype
+
     def forward(self, input_ids, attention_mask):
         batch, tokens = input_ids.shape
-        positions = torch.arange(tokens, dtype=torch.float32).view(1, tokens, 1)
+        positions = torch.arange(tokens, dtype=self.dtype).view(1, tokens, 1)
         hidden = positions.expand(batch, tokens, 2)
         return SimpleNamespace(last_hidden_state=hidden)
 
 
-def test_qwen_router_pools_last_nonpadding_token():
+@pytest.mark.parametrize("encoder_dtype", [torch.float16, torch.bfloat16, torch.float32])
+def test_qwen_router_pools_last_nonpadding_token(encoder_dtype):
     model = qwen_last_token_router.QwenLastTokenRouter(
-        PositionEncoder(), hidden_size=2, nonfallback_count=1, model_count=2
+        PositionEncoder(encoder_dtype), hidden_size=2, nonfallback_count=1, model_count=2
     )
     model.dropout = torch.nn.Identity()
     model.safety_head.weight.data.fill_(1.0)
     model.safety_head.bias.data.zero_()
+    model.oracle_head.weight.data.fill_(1.0)
+    model.oracle_head.bias.data.zero_()
 
     output = model(
         input_ids=torch.ones((2, 5), dtype=torch.long),
@@ -32,6 +40,8 @@ def test_qwen_router_pools_last_nonpadding_token():
     # Lengths five and three select zero-based positions four and two.  Each
     # duplicated hidden coordinate is summed by the head: 8 and 4.
     assert output["safety_logits"].squeeze(-1).tolist() == [8.0, 4.0]
+    assert output["oracle_logits"].tolist() == [[8.0, 8.0], [4.0, 4.0]]
+    assert all(logits.dtype == torch.float32 for logits in output.values())
 
 
 def test_qwen_builder_uses_right_padding_and_disables_cache(monkeypatch):

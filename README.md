@@ -699,8 +699,24 @@ validation-safety checkpoint. It freezes the threshold with the same validation
 margin and stability rule, evaluates the development test, and exports a
 reconstructable artifact plus scored evidence. It then measures only the Qwen
 router forward pass and launches a demo whose candidate latency remains
-analytical. Notebook 06 is deliberately output-free in Git and has no result
-until it is executed.
+analytical. The notebook builder emits an output-free notebook; retained notebook
+06 output currently records a failed execution, not a completed V6 evaluation.
+All five epochs completed (best validation safety loss 0.2461 at epoch 3), then
+post-training prediction failed because FP16 encoder states met FP32 head weights.
+The router now casts the pooled state to each head's weight dtype before its
+linear projection, including inference without autocast. For example, FP16
+`[4, 4]` is promoted to FP32 `[4, 4]`; unit weights and zero bias still produce
+logit `8`. This fixes the numeric-type mismatch without changing the safety
+target or policy gates. FP16, BF16, and FP32 encoder outputs have regression
+coverage for both heads. Notebook tests permit retained execution evidence,
+while the builder continues to emit clean notebooks.
+
+To rerun in Colab, first sync the corrected
+`src/llm_router/models/qwen_last_token_router.py` to the `poc` branch fetched by
+setup, then restart the runtime and run notebook 06 from the first cell. Updating
+only the notebook while fetching old remote source will reproduce the error.
+The retained failed-run outputs are historical; calibration, routing quality,
+and measured V6 overhead still require a successful rerun.
 Embedded notebook output is not a substitute for the reconstructable ZIP, which
 remains the authoritative run record and should be preserved separately.
 

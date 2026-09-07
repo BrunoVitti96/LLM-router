@@ -8,6 +8,36 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-09-07 — Fix V6 mixed-dtype post-training inference
+
+In plain language, notebook 06 finished training but could not score prompts
+because its encoder and classifier used different numeric types. The saved
+execution selected epoch 3 (validation safety loss 0.2461), then failed with
+`mat1 and mat2 must have the same dtype, but got Half and Float`. It did not
+produce a calibrated policy or completed test evaluation.
+
+Technically, training and validation used autocast, but the post-training
+inference loop did not. `QwenLastTokenRouter.forward` now casts the final-token
+representation to each head's weight dtype before projection. Thus
+`s_m = w_m^T cast(h_route, dtype(w_m)) + b_m` works with FP16/BF16 encoder
+states and FP32 heads without requiring every caller to enable autocast.
+For example, `[4, 4]` promoted from FP16 to FP32 still produces `8` for unit
+weights and zero bias. Casting preserves autograd; it cannot recover precision
+already lost inside the encoder. Model loading precision and policy contracts
+remain as before.
+
+Regression coverage checks FP16, BF16, and FP32 states, both heads, and last
+non-padding pooling (lengths five and three yield logits 8 and 4). Notebook 06
+and its builder document the fix and the need to sync companion source before
+restarting Colab. Existing failed-run output is preserved; the notebook contract
+test now accepts retained outputs as the V5 test already does. The README
+distinguishes this incomplete run from a successful V6 result.
+
+Validation: all 53 tests pass on the local CPU runtime, including the three
+encoder-dtype regression cases; source compilation and `git diff --check` pass.
+Repository-wide Ruff reports nine existing issues in unrelated files. A full
+Qwen GPU training rerun has not been performed locally.
+
 ## 2026-09-04 — V6 Qwen2.5-1.5B final-token router ablation created
 
 The completed V5 dataset-OOD seed-42 result reduced router truncation from
