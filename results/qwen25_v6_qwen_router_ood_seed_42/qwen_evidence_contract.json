@@ -1,0 +1,52 @@
+{
+  "candidate_latency": "analytical BF16; published runtime is unused",
+  "candidates": {
+    "Qwen2.5-1.5B": {
+      "evaluation_run": "2024-09-19T16-22-58.240552",
+      "evidence_repo": "open-llm-leaderboard/Qwen__Qwen2.5-1.5B-Instruct-details",
+      "evidence_revision": "801e825efda393dafd601fc9f9fa85646050f3b5",
+      "model_repo": "Qwen/Qwen2.5-1.5B-Instruct",
+      "model_revision": "989aa7980e4cf806f80c7fef2b1adb7bc71aa306",
+      "parameters_billions": 1.54
+    },
+    "Qwen2.5-3B": {
+      "evaluation_run": "2024-09-19T10-05-30.339220",
+      "evidence_repo": "open-llm-leaderboard/Qwen__Qwen2.5-3B-Instruct-details",
+      "evidence_revision": "f5b005e407b8546e16de9349a82bbd40b0133abe",
+      "model_repo": "Qwen/Qwen2.5-3B-Instruct",
+      "model_revision": "aa8e72537993ba99e69dfaafa59ed015b17504d1",
+      "parameters_billions": 3.09
+    },
+    "Qwen2.5-7B": {
+      "evaluation_run": "2024-09-19T16-21-01.446061",
+      "evidence_repo": "open-llm-leaderboard/Qwen__Qwen2.5-7B-Instruct-details",
+      "evidence_revision": "98dea3336d741d4433976eeaf9e5125f39c45d5b",
+      "model_repo": "Qwen/Qwen2.5-7B-Instruct",
+      "model_revision": "a09a35458c702b33eeacc393d103063234e8bc28",
+      "parameters_billions": 7.61
+    }
+  },
+  "correctness_policy": {
+    "metric_priority": [
+      "prompt_level_strict_acc,none",
+      "prompt_level_strict_acc",
+      "exact_match,none",
+      "acc_norm,none",
+      "acc,none"
+    ],
+    "quality_formula": "correct / outcomes",
+    "required_values": [
+      0,
+      1
+    ],
+    "source": "published task-aware per-example metric"
+  },
+  "evidence_tag": "7bc81cd9a9ad2731",
+  "excluded_overlapping_tasks": [
+    "leaderboard_gpqa_extended",
+    "leaderboard_gpqa_main"
+  ],
+  "max_prompts_per_task": 300,
+  "sampling_seed": 20260821,
+  "source": "Hugging Face Open LLM Leaderboard per-example detail datasets"
+}

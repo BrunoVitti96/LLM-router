@@ -1,5 +1,15 @@
 # Calibrated ModernBERT LLM router — investor brief
 
+> **Current status — 2026-09-11:** The old Qwen detail rows use obsolete MATH
+> format scores. Notebook 06 now regrades recorded math responses under the
+> pinned `qwen-math-verify-v2` contract. A boxed 968 against gold 968 changes
+> from old score 0 to correctness 1. Earlier V4/V5/V6 performance claims below
+> are historical and must not be presented as corrected results. A fresh Colab
+> training/evaluation is required; see [README](../README.md) and the
+> [current runbook](COLAB_RUNBOOK.md). Funding milestones should validate these
+> corrected labels and customer serving economics before claiming savings.
+
+
 ## The opportunity
 
 Organizations often send every prompt to their strongest model because a cheap

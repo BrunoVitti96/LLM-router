@@ -1,26 +1,71 @@
-# Colab V6 causal-router runbook
+# Colab V6 scoring-v2 runbook
 
-Run `notebooks/06_train_qwen15_last_token_router_ood_v6.ipynb` from top to
-bottom on a fresh GPU runtime. An A100 is preferred; a T4 may require several
-hours. The default run loads Qwen2.5-1.5B as a prompt-only router, keeps the
-first 1,023 tokens plus Qwen's existing one-token `<|endoftext|>` sentinel, and
-reads the final sentinel state through two independent safety heads. It never
-generates candidate answers.
+The old math detail rows used obsolete format-based scores. The corrected
+notebook grades saved answers using pinned Math-Verify before training. A boxed
+968 against gold 968 now scores 1 instead of inheriting the old zero. The old
+V6 model cannot be reused: its training labels, class weights, calibration, and
+threshold were based on the previous scoring contract.
 
-Keep `RUN_ID = "qwen25_v6_qwen_router_ood_seed_42"` for the direct V5
-development comparison. Micro-batch size one and four-step gradient
-accumulation preserve effective batch size four. For example, 5,274 training
-prompts produce $\lceil5{,}274/4\rceil=1{,}319$ optimizer updates per epoch.
-Do not reduce the 1,024-token budget after an out-of-memory error; restart on a
-larger GPU so the experiment identity stays fixed.
+## Immediate rerun using the source ZIP
 
-After training, verify the validation threshold was frozen before the test
-comparison, inspect probability spans and within-dataset ROC-AUC, compare
-measured Qwen-router p95 with break-even overhead, and download the generated
-ZIP. Seed 42 is not fresh sealed evidence because its V5 outcomes motivated V6.
-Use untouched seeds or new task families for confirmation.
+1. Run `python scripts/build_colab_bundle.py` locally. This writes
+   `dist/colab/llm_router_colab_scoring_v2.zip` and a copy of notebook 06.
+2. Upload that notebook in Colab and choose a **fresh GPU runtime**. An A100 is
+   preferred; T4 is supported and training can take several hours.
+3. In Colab's Files sidebar upload `llm_router_colab_scoring_v2.zip` directly to
+   `/content`. Do not extract it manually. Setup validates and extracts the
+   bundle, installs dependencies, and verifies the scoring contract.
+4. Enable your `HF_TOKEN` Colab secret. Accept the three gated evidence datasets
+   with the same account; details are in the historical access section below.
+5. Keep `RUN_ID = "qwen25_v6_scoring_v2_ood_seed_42"` and **Run all**.
+6. Before training, inspect `qwen_scoring_reconciliation.csv`: all full-task
+   counts, task coverage, binary/provenance checks and non-math means must pass.
+   Math source-aggregate differences are diagnostic and shown explicitly; local
+   pinned scores are used. For example, 7B counting locally scores 55/123 versus
+   the source's 57/123. We never assign labels to force agreement with a total.
+7. Let all five epochs finish. Epoch selection, calibration, thresholds and test
+   evaluation run afresh. Download the new result ZIP before closing Colab.
+
+Without a source ZIP, setup fetches `poc` with checked Git commands. Both the
+corrected notebook and Python helpers must already be on that branch. Updating
+only the notebook is insufficient. Restart after source/dependency changes.
+
+The source ZIP includes package files and a SHA-256 manifest, not credentials,
+model weights, old results or the local environment. It allows a rerun before
+these local changes are pushed. A source-bundle hash is recorded in exported
+provenance when the bundle is used.
+
+## Scoring and experiment identity
+
+The scorer uses Math-Verify 0.5.2, latex2sympy2-extended 1.0.6, ANTLR runtime
+4.13.2 and SymPy 1.13.3. Gold is parsed from the full original worked solution;
+candidate text is parsed from the recorded response. Empty/unusable gold or
+incompatible dependencies abort. Non-math metrics remain the published binary
+scores. Linux/Colab retains upstream symbolic timeouts; Windows validation uses
+an isolated process with a hard watchdog rather than silently disabling limits.
+
+The report preserves original/updated scores and raw grading evidence, including
+all pre-cap math rows in `qwen_math_rescored_records.parquet`. Older source
+aggregates cannot all be reproduced from the stored responses and do not pin
+an exact rescoring environment; the audit preserves that limitation explicitly.
+
+The Qwen router still uses the first 1,023 tokens plus its one-token
+`<|endoftext|>` sentinel, rank-4 LoRA, five epochs and effective batch size four.
+For example, 5,274 prompts produce 1,319 optimizer updates per epoch. The
+safety label remains `candidate_quality >= fallback_quality`. If a fallback
+score is corrected from 0 to 1 and the candidate stays 0, safety changes from
+1 to 0. No candidate generation or policy-gate change is introduced.
+
+Further development runs use `qwen25_v6_scoring_v2_ood_seed_43` or `_44`;
+random runs use `qwen25_v6_scoring_v2_random_seed_{42,43,44}`. Existing seeds
+reuse benchmark evidence, so reserve new task families/customer data for
+independent confirmation. Old V5/V6 metrics are not comparable baselines.
+The 4/20 ms overhead settings remain assumptions; inspect measured timing too.
 
 ## Historical V5 input-representation runbook
+
+The following is retained for history. Its MATH detail labels are obsolete;
+use the corrected notebook 06 workflow above for new work.
 
 ## Goal
 

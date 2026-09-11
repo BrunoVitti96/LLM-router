@@ -1,0 +1,28 @@
+{
+  "schema_version": 1,
+  "measured_component": "Qwen2.5-1.5B final-token router tokenization, host-to-device transfer, and router inference",
+  "candidate_latency_method": "analytical; candidate answer generation was not run or timed",
+  "measurement_affects_frozen_policy": false,
+  "batch_size": 1,
+  "timed_requests": 100,
+  "warmup_requests": 10,
+  "max_input_tokens": 1024,
+  "input_truncation_strategy": "prefix_with_last",
+  "device": "cuda",
+  "gpu": "Tesla T4",
+  "torch_version": "2.11.0+cu128",
+  "cuda_runtime": "12.8",
+  "platform": "Linux-6.6.122+-x86_64-with-glibc2.35",
+  "end_to_end_ms": {
+    "mean": 132.54744185018353,
+    "p50": 130.74457199945755,
+    "p95": 226.92514249720261,
+    "maximum": 227.90395400079433
+  },
+  "model_only_ms": {
+    "mean": 130.64697815007094,
+    "p50": 128.70789599946875,
+    "p95": 221.42203864896146,
+    "maximum": 222.61036499912734
+  }
+}

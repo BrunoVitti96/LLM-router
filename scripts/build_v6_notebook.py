@@ -1,9 +1,10 @@
-"""Build notebook 06: Qwen2.5-1.5B final-token router ablation.
+"""Build notebook 06: Qwen final-token router with versioned corrected scores.
 
-Notebook 05 remains the source for the pinned Qwen evidence loader, analytical
-candidate-latency scenario, split implementation, and safety gates.  This
-builder replaces only the router architecture, its training cell, diagnostics,
-and artifact metadata, then removes every prior execution output.
+Notebook 05 supplies candidate facts, analytical latency, split implementation,
+and safety gates. The evidence loader now regrades MATH with the published
+Math-Verify procedure and audits full-task source evidence before sampling.
+Historical V5/V6 scores cannot serve as architecture comparison baselines.
+The builder emits an output-free notebook under new scoring-v2 run IDs.
 """
 
 from __future__ import annotations
@@ -38,13 +39,18 @@ notebook["cells"][0]["source"] = source_lines(
     r"""
 # V6 Qwen2.5-1.5B final-token router OOD experiment
 
-This notebook asks whether a substantially larger **causal decoder** can rank
-fallback-relative replacement safety better than notebook 05's masked-mean
-ModernBERT.  It reuses the same pinned three-tier Qwen outcomes, deterministic
-dataset-OOD split, seed, binary safety labels, class-balanced BCE, calibration,
-threshold grid, latency scenario, and quality gates.
+This notebook reruns the **causal decoder** safety router after correcting the
+MATH scoring contract. Pinned per-example MATH rows contain older scores that
+can reject a correct boxed answer, while the published aggregates were updated
+with Math-Verify. For example, a response ending in `\\boxed{968}` can have an
+old score of 0 even though its target is 968. The corrected grader restores the
+appropriate label before sampling or training. Counts and non-math source means
+must reconcile. Math source means are reported separately because their upstream
+rescoring environment is not pinned and some 7B totals do not reproduce exactly.
+Original scores and raw evidence remain exported; no labels are invented to
+match an aggregate.
 
-Only the router representation changes.  A separate
+A separate
 `Qwen/Qwen2.5-1.5B-Instruct` instance reads the prompt, its existing one-token
 `<|endoftext|>` sentinel is appended, and two independent safety logits are
 computed from the sentinel's final hidden state.  The router never invokes text
@@ -52,10 +58,15 @@ generation, does not observe candidate answers, and does not directly emit a
 model name.  The analytical selector still chooses the fastest candidate whose
 calibrated safety probability clears the frozen threshold.
 
-Because notebook 05 seed 42 has already been inspected and motivated this
-architecture, this default seed-42 run is a development comparison—not new
-sealed confirmation.  Reserve untouched seeds or new task families for a final
-claim.
+The deterministic split, seed, class-balanced BCE, calibration, threshold grid,
+latency scenario, and quality gates remain fixed. Corrected labels change what
+the router learns: if fallback quality changes from 0 to 1 while a smaller
+candidate stays at 0, its safety label changes from 1 to 0.
+
+The new `scoring_v2` run IDs preserve historical results. Earlier V5/V6 numbers
+use a different scoring contract and are not a controlled architecture
+comparison. Seed 42 remains development evidence because its prompts have been
+inspected; use untouched task families for independent confirmation.
 """
 )
 
@@ -68,42 +79,128 @@ strongly preferred because five epochs over 1,024-token prompts are expensive.
 The notebook downloads Qwen2.5-1.5B once as the router.  It never generates new
 candidate answers—the benchmark outcomes remain the pinned published records.
 
-The Qwen router casts its final hidden state to each classifier head's dtype
-before projection, so FP16/BF16 encoder output also works during inference
-without autocast. For example, FP16 `[4, 4]` becomes FP32 `[4, 4]` and a
-unit-weight, zero-bias head still returns `8`. This fixes the post-training
-`Half and Float` error. Restart the runtime and run from setup after syncing
-the corrected `src/llm_router/models/qwen_last_token_router.py` to the `poc`
-branch fetched below; a notebook update alone does not update remote source.
+For an immediate run, upload `llm_router_colab_scoring_v2.zip` through Colab's
+Files sidebar so it exists at `/content/llm_router_colab_scoring_v2.zip`.
+Setup safely extracts this source bundle to `/content/LLM_Router` and skips Git.
+Without that bundle, setup fetches the `poc` branch; both the corrected notebook
+and companion Python source must have reached that branch. A scoring-version
+check stops stale source before downloads or training. Restart the runtime and
+run every cell from setup; old checkpoints contain the old labels.
+
+The existing FP16/BF16 head-dtype fix is retained. For example, FP16 `[4, 4]`
+is promoted to FP32 before a unit-weight head computes the same logit `8`.
 """
 )
 
-setup_source = "".join(notebook["cells"][2]["source"])
-setup_source = setup_source.replace(
-    'REQUIRED_EVIDENCE_HELPER = PROJECT_ROOT / "src/llm_router/qwen_evidence.py"',
-    'REQUIRED_EVIDENCE_HELPER = PROJECT_ROOT / "src/llm_router/qwen_evidence.py"\n'
-    'REQUIRED_QWEN_ROUTER = (\n'
-    '    PROJECT_ROOT / "src/llm_router/models/qwen_last_token_router.py"\n'
-    ')',
+notebook["cells"][2]["source"] = source_lines(
+    r'''
+%cd /content
+
+import hashlib
+import importlib
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import zipfile
+from pathlib import Path, PurePosixPath
+
+REPOSITORY_URL = "https://github.com/BrunoVitti96/LLM-router.git"
+REPOSITORY_BRANCH = "poc"
+PROJECT_ROOT = Path("/content/LLM_Router")
+SOURCE_BUNDLE = Path("/content/llm_router_colab_scoring_v2.zip")
+EXPECTED_SCORING_VERSION = "qwen-math-verify-v2"
+
+
+def extract_source_bundle(bundle_path, project_root):
+    """Extract a source ZIP only after validating all paths and file types."""
+    root = project_root.resolve()
+    with zipfile.ZipFile(bundle_path) as archive:
+        members = archive.infolist()
+        for member in members:
+            relative = PurePosixPath(member.filename)
+            mode = member.external_attr >> 16
+            target = (root / member.filename).resolve()
+            if (
+                relative.is_absolute()
+                or ".." in relative.parts
+                or "\\" in member.filename
+                or ":" in member.filename
+                or not target.is_relative_to(root)
+                or stat.S_ISLNK(mode)
+            ):
+                raise ValueError(f"Unsafe source-bundle path: {member.filename!r}")
+        root.mkdir(parents=True, exist_ok=True)
+        for member in members:
+            target = root / member.filename
+            if member.is_dir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.open(member) as source, target.open("wb") as destination:
+                    shutil.copyfileobj(source, destination)
+
+
+if SOURCE_BUNDLE.is_file():
+    extract_source_bundle(SOURCE_BUNDLE, PROJECT_ROOT)
+    SOURCE_BUNDLE_SHA256 = hashlib.sha256(SOURCE_BUNDLE.read_bytes()).hexdigest()
+    print(f"Using corrected local source bundle: {SOURCE_BUNDLE}")
+else:
+    SOURCE_BUNDLE_SHA256 = None
+    if not PROJECT_ROOT.exists():
+        subprocess.run(
+            ["git", "clone", "--branch", REPOSITORY_BRANCH,
+             REPOSITORY_URL, str(PROJECT_ROOT)],
+            check=True,
+        )
+    for arguments in (
+        ["fetch", "origin", REPOSITORY_BRANCH],
+        ["switch", REPOSITORY_BRANCH],
+        ["pull", "--ff-only", "origin", REPOSITORY_BRANCH],
+    ):
+        subprocess.run(["git", "-C", str(PROJECT_ROOT), *arguments], check=True)
+
+REQUIRED_EVIDENCE_HELPER = PROJECT_ROOT / "src/llm_router/qwen_evidence.py"
+REQUIRED_QWEN_ROUTER = PROJECT_ROOT / "src/llm_router/models/qwen_last_token_router.py"
+if not REQUIRED_EVIDENCE_HELPER.is_file() or not REQUIRED_QWEN_ROUTER.is_file():
+    raise RuntimeError(
+        "Repository/source mismatch: notebook 06 requires the corrected evidence "
+        "helper and Qwen last-token router. Upload the matching source ZIP."
+    )
+os.chdir(PROJECT_ROOT)
+%pip install -q -U ".[notebook]"
+
+SOURCE_ROOT = str(PROJECT_ROOT / "src")
+if SOURCE_ROOT not in sys.path:
+    sys.path.insert(0, SOURCE_ROOT)
+for module_name in list(sys.modules):
+    if module_name == "llm_router" or module_name.startswith("llm_router."):
+        del sys.modules[module_name]
+importlib.invalidate_caches()
+llm_router = importlib.import_module("llm_router")
+evidence_helper = importlib.import_module("llm_router.qwen_evidence")
+if getattr(evidence_helper, "SCORING_CONTRACT_VERSION", None) != EXPECTED_SCORING_VERSION:
+    raise RuntimeError(
+        "Repository/source mismatch: this notebook requires qwen-math-verify-v2. "
+        "Upload llm_router_colab_scoring_v2.zip to /content, restart the runtime, "
+        "and rerun setup, or sync the matching source to the poc branch."
+    )
+math_helper = importlib.import_module("llm_router.math_scoring")
+math_helper.validate_math_scoring_runtime()
+print(
+    f"Router package ready from {Path(llm_router.__file__).resolve()} "
+    f"with scoring contract {evidence_helper.SCORING_CONTRACT_VERSION}"
 )
-setup_source = setup_source.replace(
-    "if not REQUIRED_EVIDENCE_HELPER.is_file():",
-    "if not REQUIRED_EVIDENCE_HELPER.is_file() or not REQUIRED_QWEN_ROUTER.is_file():",
+'''
 )
-setup_source = setup_source.replace(
-    "f\"Repository/source mismatch: {REQUIRED_EVIDENCE_HELPER} is missing. \"",
-    "\"Repository/source mismatch: notebook 06 requires both the evidence \"\n"
-    "        \"helper and Qwen last-token router source. \"",
-)
-setup_source = setup_source.replace("notebook 03", "notebook 06")
-notebook["cells"][2]["source"] = source_lines(setup_source)
 
 notebook["cells"][3]["source"] = source_lines(
     r"""
 ## 2. Freeze the v6 causal-router contract
 
-The data and policy contract are unchanged from V5.  Qwen2.5-1.5B replaces
-ModernBERT only as the prompt representation model.  Rank-4 LoRA is trained for
+The scoring contract is now `qwen-math-verify-v2`; the original policy, split,
+and router architecture are retained. Rank-4 LoRA is trained for
 all five epochs, and the minimum OOD-validation safety loss checkpoint is
 restored.
 
@@ -114,7 +211,7 @@ of four.  For example, four prompts with individual losses `0.10`, `0.20`,
 $(0.10+0.20+0.30+0.40)/4=0.25$.
 
 The frozen 4 ms and conservative 20 ms overhead assumptions are retained solely
-for policy comparability.  Measured Qwen-router p50/p95 are reported separately;
+as frozen evaluation assumptions. Measured Qwen-router p50/p95 are reported separately;
 candidate answer generation is still analytical-only for latency.
 """
 )
@@ -123,7 +220,6 @@ contract_prefix = r'''
 import hashlib
 import json
 import os
-import shutil
 from dataclasses import replace
 from datetime import datetime, timezone
 from getpass import getpass
@@ -171,22 +267,25 @@ from llm_router.public_benchmark import (
 )
 from llm_router.qwen_evidence import (
     BINARY_METRIC_PRIORITY,
+    SCORING_CONTRACT_VERSION,
     audit_aligned_outcomes,
-    published_binary_score,
+    reconcile_published_results,
+    score_published_sample,
+    scoring_contract,
     validate_qwen_tier_contract,
 )
 from llm_router.router_overhead import benchmark_modernbert_overhead
 from llm_router.utils.training import seed_everything
 
 RUN_SPECS = {
-    "qwen25_v6_qwen_router_ood_seed_42": ("dataset_ood", 42),
-    "qwen25_v6_qwen_router_ood_seed_43": ("dataset_ood", 43),
-    "qwen25_v6_qwen_router_ood_seed_44": ("dataset_ood", 44),
-    "qwen25_v6_qwen_router_random_seed_42": ("random", 42),
-    "qwen25_v6_qwen_router_random_seed_43": ("random", 43),
-    "qwen25_v6_qwen_router_random_seed_44": ("random", 44),
+    "qwen25_v6_scoring_v2_ood_seed_42": ("dataset_ood", 42),
+    "qwen25_v6_scoring_v2_ood_seed_43": ("dataset_ood", 43),
+    "qwen25_v6_scoring_v2_ood_seed_44": ("dataset_ood", 44),
+    "qwen25_v6_scoring_v2_random_seed_42": ("random", 42),
+    "qwen25_v6_scoring_v2_random_seed_43": ("random", 43),
+    "qwen25_v6_scoring_v2_random_seed_44": ("random", 44),
 }
-RUN_ID = "qwen25_v6_qwen_router_ood_seed_42"
+RUN_ID = "qwen25_v6_scoring_v2_ood_seed_42"
 SPLIT_MODE, SEED = RUN_SPECS[RUN_ID]
 
 MAX_PROMPTS_PER_TASK = 300
@@ -205,11 +304,14 @@ assert DEVICE == "cuda", "Choose Runtime > Change runtime type > GPU."
 '''
 
 contract_suffix = r'''
+evidence_contract["correctness_policy"] = scoring_contract()
 QWEN_ROUTER_REPO = CANDIDATES["Qwen2.5-1.5B"]["model_repo"]
 QWEN_ROUTER_REVISION = CANDIDATES["Qwen2.5-1.5B"]["model_revision"]
 SETUP_NAME = "qwen15_last_token_1024"
 V6_QWEN_ROUTER_CONTRACT = {
-    "version": "v6-qwen15-last-token",
+    "version": "v6-qwen15-last-token-scoring-v2",
+    "scoring_version": SCORING_CONTRACT_VERSION,
+    "historical_architecture_comparison_valid": False,
     "development_comparison": True,
     "router_repo": QWEN_ROUTER_REPO,
     "router_revision": QWEN_ROUTER_REVISION,
@@ -235,23 +337,6 @@ V6_QWEN_ROUTER_CONTRACT = {
 assert EPOCHS == MINIMUM_EPOCHS == 5
 assert EARLY_STOPPING_PATIENCE is None
 assert V6_QWEN_ROUTER_CONTRACT["effective_batch_size"] == 4
-
-# Observed V5 seed-42 values are descriptive references only.  They never enter
-# training, calibration, threshold selection, or the V6 pass/fail decision.
-V5_SEED42_REFERENCE = {
-    "validation_loss": 0.24034847696021597,
-    "validation_safe_roc_auc": 0.5690090359453666,
-    "validation_unsafe_average_precision": 0.18131999714355954,
-    "validation_routed_fraction": 0.10801186943620178,
-    "validation_conservative_savings": 0.1154382741723079,
-    "test_quality_retention_lcb": 0.9954472432372866,
-    "test_quality_loss_rate_ucl": 0.028846846701213805,
-    "test_guarded_dataset_retention_lcb": 0.8132531107252527,
-    "test_routed_fraction": 0.35923490735206215,
-    "test_conservative_savings": 0.34312370708040274,
-    "test_gains": 49,
-    "test_losses": 37,
-}
 
 EVIDENCE_TAG = hashlib.sha256(
     json.dumps(evidence_contract, sort_keys=True).encode("utf-8")
@@ -294,13 +379,103 @@ notebook["cells"][4]["source"] = source_lines(
     contract_prefix + "\n" + candidate_and_auth + "\n" + contract_suffix
 )
 
-evidence_markdown = "".join(notebook["cells"][5]["source"])
-evidence_markdown = evidence_markdown.replace(
-    "It downloads JSONL evidence only—never Qwen weights. Each selected",
-    "This stage downloads JSONL evidence only. The later training cell loads "
-    "Qwen weights solely for the router. Each selected",
+notebook["cells"][5]["source"] = source_lines(
+    r'''
+## 3. Download, correct, and reconcile published Qwen evidence
+
+Accept access to each of these auto-gated Hugging Face datasets:
+
+- `open-llm-leaderboard/Qwen__Qwen2.5-1.5B-Instruct-details`
+- `open-llm-leaderboard/Qwen__Qwen2.5-3B-Instruct-details`
+- `open-llm-leaderboard/Qwen__Qwen2.5-7B-Instruct-details`
+
+The same pinned evaluation runs and 37 non-overlapping tasks remain selected.
+This cell downloads JSONL evidence, not model weights. MATH rows are regraded
+from the full response and the document's worked solution using the published
+Math-Verify procedure. Other tasks retain their published binary metric,
+including strict prompt-level IFEval accuracy. For example, a strict IFEval
+score of 0 remains 0 even if loose accuracy is 1.
+
+Original metrics and scores, corrected scores, grader version, raw document,
+and response payloads are kept. Before alignment or the 300-prompt task cap,
+every task/model sample count and non-math mean must match the source metadata.
+Math labels use the pinned local scorer; the upstream math rescoring environment
+is not versioned, and some 7B aggregate totals do not reproduce. Those differences
+are displayed and exported as diagnostics, never hidden or used to invent labels.
+For example, local counting quality may be 55/123 while the source reports 57/123.
+The audit distinguishes source detail means, local means, and published leaf means.
+'''
 )
-notebook["cells"][5]["source"] = source_lines(evidence_markdown)
+
+loader_source = "".join(notebook["cells"][6]["source"])
+loader_source = loader_source.replace(
+    "metric_name, score = published_binary_score(payload)",
+    "scored = score_published_sample(payload, task)",
+).replace(
+    '"score": score,\n                        "published_metric": metric_name,',
+    '**scored,\n'
+    '                        "raw_doc_json": json.dumps(\n'
+    '                            payload.get("doc"), ensure_ascii=False, sort_keys=True\n'
+    '                        ),\n'
+    '                        "raw_resps_json": json.dumps(\n'
+    '                            payload.get("resps"), ensure_ascii=False\n'
+    '                        ),\n'
+    '                        "filtered_resps_json": json.dumps(\n'
+    '                            payload.get("filtered_resps"), ensure_ascii=False\n'
+    '                        ),',
+).replace(
+    'raw_records = pd.DataFrame(raw_rows)',
+    'raw_records = pd.DataFrame(raw_rows)\n'
+    'OUTPUT_DIR.mkdir(parents=True, exist_ok=True)\n'
+    'try:\n'
+    '    reconciliation_audit = reconcile_published_results(\n'
+    '        raw_records, published_run_metadata\n'
+    '    )\n'
+    'except ValueError as error:\n'
+    '    if hasattr(error, "reconciliation_audit"):\n'
+    '        error.reconciliation_audit.to_csv(\n'
+    '            OUTPUT_DIR / "qwen_scoring_reconciliation.csv", index=False\n'
+    '        )\n'
+    '    raise\n'
+    'reconciliation_audit.to_csv(\n'
+    '    OUTPUT_DIR / "qwen_scoring_reconciliation.csv", index=False\n'
+    ')\n'
+    'raw_records.loc[raw_records.task.str.startswith("leaderboard_math_")].to_parquet(\n'
+    '    OUTPUT_DIR / "qwen_math_rescored_records.parquet", index=False\n'
+    ')\n'
+    'log_stage("full-task count and nonmath checks passed; math locally regraded",\n'
+    '          groups=len(reconciliation_audit))\n'
+    'display(reconciliation_audit)\n'
+    'math_differences = reconciliation_audit.loc[\n'
+    '    ~reconciliation_audit.aggregate_required & ~reconciliation_audit.mean_matches\n'
+    ']\n'
+    'if not math_differences.empty:\n'
+    '    print("Math source aggregate differences (local pinned scores are used):")\n'
+    '    display(math_differences)',
+)
+notebook["cells"][6]["source"] = source_lines(loader_source)
+
+notebook["cells"][7]["source"] = source_lines(
+    r'''
+## 4. Align, sample, and audit the corrected outcomes
+
+Full-task counts and non-math reconciliation have passed; math has been regraded
+under the pinned contract and its source differences reported. The loader aligns all
+three candidate models, verifies matching document hashes and rendered prompts,
+and keeps at most 300 prompts per task using the unchanged deterministic seed.
+Duplicate document hashes are kept once globally to prevent repeated questions
+crossing dataset-OOD partitions.
+
+The corrected binary `score` becomes `is_correct`. Quality remains
+`correct / outcomes`: 240 correct rows among 300 produce $240/300=80\%$.
+The task cap changes the subset, so this sampled mean can differ from the
+full-task mean above. The original published score and
+the corrected score remain available side by side in exported records.
+
+The pinned Qwen tokenizer counts input/output tokens without model inference.
+Realized completion length remains excluded from analytical latency.
+'''
+)
 
 notebook["cells"][13]["source"] = source_lines(
     r"""
@@ -333,7 +508,7 @@ notebook["cells"][14]["source"] = source_lines(
 The router uses FP16 on a T4 and BF16 on Ampere-or-newer GPUs.  Gradient
 checkpointing is enabled in the model builder.  If a T4 still runs out of
 memory, restart the runtime before retrying; do not silently shorten the input
-or change the dataset because that would invalidate the V5 comparison.
+or change the dataset because that would change the frozen run contract.
 """
 )
 
@@ -445,8 +620,8 @@ notebook["cells"][16]["source"] = source_lines(
 ## 9. Select the threshold using validation only
 
 There is one architecture, so validation selects only its calibrated safety
-threshold.  The V5 numbers displayed later are read-only references and cannot
-change this policy.
+threshold. The corrected evidence is fixed before splitting; neither test
+outcomes nor historical run metrics participate in policy selection.
 """
 )
 
@@ -549,11 +724,12 @@ if MEASURE_ROUTER_OVERHEAD:
 
 notebook["cells"][20]["source"] = source_lines(
     """
-## 11. Evaluate the same seed-42 OOD test
+## 11. Evaluate the frozen development test
 
-This opens exactly the same deterministic test partition used by notebook 05,
-which is useful for an apples-to-apples development comparison.  It is not a
-new sealed result because V5's outcomes are already known.
+The default seed-42 prompts were inspected in earlier experiments. This is a
+development evaluation under corrected labels, not new independent confirmation
+or a controlled comparison with earlier V5/V6 metrics. The selected run's
+deterministic partition and every original policy gate remain unchanged.
 """
 )
 
@@ -667,12 +843,14 @@ display(
 
 notebook["cells"][24]["source"] = source_lines(
     """
-## 13. V5-versus-V6 comparison dashboard
+## 13. Corrected-scoring V6 diagnostic dashboard
 
-The V5 seed-42 reference is displayed only after the V6 policy is frozen and
-evaluated.  Better means stronger validation ranking and within-dataset
-discrimination while still passing the conservative quality, harm, subgroup,
-stability, and latency-overhead gates.
+These plots describe this run's corrected labels, learning curve, validation
+ranking, answer gains/losses, and within-dataset discrimination. For example,
+10 gains and 4 losses yield six additional correct answers. Conservative
+quality, harm, subgroup, stability, and latency-overhead gates still decide
+whether that outcome passes. Historical scores use a different contract and
+are deliberately absent from this dashboard.
 """
 )
 
@@ -682,24 +860,11 @@ best_row = selected_training.history.loc[
     selected_training.history.epoch.eq(selected_training.best_epoch)
 ].iloc[0]
 validation_row = setup_comparison.iloc[0]
-v5_v6_validation_comparison = pd.DataFrame(
+current_validation_summary = pd.DataFrame(
     [
         {
-            "router": "V5 ModernBERT prefix_1024",
-            "validation_loss": V5_SEED42_REFERENCE["validation_loss"],
-            "safe_roc_auc": V5_SEED42_REFERENCE["validation_safe_roc_auc"],
-            "unsafe_average_precision": V5_SEED42_REFERENCE[
-                "validation_unsafe_average_precision"
-            ],
-            "routed_fraction": V5_SEED42_REFERENCE[
-                "validation_routed_fraction"
-            ],
-            "conservative_savings": V5_SEED42_REFERENCE[
-                "validation_conservative_savings"
-            ],
-        },
-        {
-            "router": "V6 Qwen1.5B final token",
+            "router": "V6 Qwen1.5B final token, scoring v2",
+            "scoring_version": SCORING_CONTRACT_VERSION,
             "validation_loss": best_row.validation_safety_loss,
             "safe_roc_auc": validation_row.safe_roc_auc,
             "unsafe_average_precision": validation_row.unsafe_average_precision,
@@ -708,28 +873,11 @@ v5_v6_validation_comparison = pd.DataFrame(
         },
     ]
 )
-v5_v6_test_comparison = pd.DataFrame(
+current_test_summary = pd.DataFrame(
     [
         {
-            "router": "V5 ModernBERT prefix_1024",
-            "quality_retention_lcb": V5_SEED42_REFERENCE[
-                "test_quality_retention_lcb"
-            ],
-            "quality_loss_rate_ucl": V5_SEED42_REFERENCE[
-                "test_quality_loss_rate_ucl"
-            ],
-            "guarded_dataset_retention_lcb": V5_SEED42_REFERENCE[
-                "test_guarded_dataset_retention_lcb"
-            ],
-            "routed_fraction": V5_SEED42_REFERENCE["test_routed_fraction"],
-            "conservative_savings": V5_SEED42_REFERENCE[
-                "test_conservative_savings"
-            ],
-            "gains": V5_SEED42_REFERENCE["test_gains"],
-            "losses": V5_SEED42_REFERENCE["test_losses"],
-        },
-        {
-            "router": "V6 Qwen1.5B final token",
+            "router": "V6 Qwen1.5B final token, scoring v2",
+            "scoring_version": SCORING_CONTRACT_VERSION,
             "quality_retention_lcb": router_metrics.quality_retention_lcb,
             "quality_loss_rate_ucl": router_metrics.quality_loss_rate_ucl,
             "guarded_dataset_retention_lcb": (
@@ -764,21 +912,20 @@ axes[0, 0].set(
 axes[0, 0].legend()
 
 axes[0, 1].bar(
-    v5_v6_validation_comparison.router,
-    v5_v6_validation_comparison.safe_roc_auc,
-    color=["tab:blue", "tab:green"],
+    ["Safety ROC-AUC", "Unsafe average precision"],
+    [validation_row.safe_roc_auc, validation_row.unsafe_average_precision],
+    color=["tab:green", "tab:orange"],
 )
-axes[0, 1].axhline(0.5, color="black", linewidth=0.8)
-axes[0, 1].set(title="2. OOD-validation safety ROC-AUC", ylim=(0.45, 1.0))
+axes[0, 1].set(title="2. Validation discrimination", ylim=(0, 1.0))
 axes[0, 1].tick_params(axis="x", rotation=15)
 
 axes[1, 0].bar(
-    v5_v6_test_comparison.router,
-    100 * v5_v6_test_comparison.conservative_savings,
-    color=["tab:blue", "tab:green"],
+    ["Gains", "Losses"],
+    [int(gained.sum()), int(lost.sum())],
+    color=["tab:green", "tab:red"],
 )
 axes[1, 0].axhline(0, color="black", linewidth=0.8)
-axes[1, 0].set(title="3. Test analytical savings at 20 ms", ylabel="Percent")
+axes[1, 0].set(title="3. Test answers gained/lost versus fallback", ylabel="Prompts")
 axes[1, 0].tick_params(axis="x", rotation=15)
 
 plot_rows = within_dataset_discrimination.dropna(
@@ -796,12 +943,12 @@ axes[1, 1].set(
     xlim=(0, 1),
 )
 
-fig.suptitle("V6 Qwen1.5B final-token router diagnostic", fontsize=16)
+fig.suptitle("V6 Qwen1.5B final-token router — corrected scoring v2", fontsize=16)
 plt.tight_layout(rect=(0, 0, 1, 0.96))
 plt.show()
 v6_diagnostic_figure = fig
-display(v5_v6_validation_comparison)
-display(v5_v6_test_comparison)
+display(current_validation_summary)
+display(current_test_summary)
 '''
 )
 
@@ -811,8 +958,10 @@ notebook["cells"][26]["source"] = source_lines(
 
 The ZIP contains the Qwen LoRA adapter, final-token safety/oracle heads,
 tokenizer, calibration, threshold frontier, prompt-level decisions,
-within-dataset diagnostics, measured standalone router timing, and the unchanged
-published Qwen outcome evidence.
+within-dataset diagnostics, measured standalone router timing, original and
+corrected Qwen scores, raw grading evidence, and full-task reconciliation.
+`qwen_math_rescored_records.parquet` preserves every math row before the cap,
+including the original worked solutions and responses used by the grader.
 """
 )
 
@@ -826,15 +975,18 @@ setup_threshold_search.to_csv(
 )
 records.to_parquet(report_dir / "qwen_candidate_records.parquet", index=False)
 quality_audit.to_csv(report_dir / "qwen_quality_audit.csv", index=False)
+reconciliation_audit.to_csv(
+    report_dir / "qwen_scoring_reconciliation.csv", index=False
+)
 panel_summary.to_csv(report_dir / "qwen_candidate_panel_summary.csv")
 within_dataset_discrimination.to_csv(
     report_dir / "within_dataset_discrimination.csv", index=False
 )
-v5_v6_validation_comparison.to_csv(
-    report_dir / "v5_v6_validation_comparison.csv", index=False
+current_validation_summary.to_csv(
+    report_dir / "v6_scoring_v2_validation_summary.csv", index=False
 )
-v5_v6_test_comparison.to_csv(
-    report_dir / "v5_v6_test_comparison.csv", index=False
+current_test_summary.to_csv(
+    report_dir / "v6_scoring_v2_test_summary.csv", index=False
 )
 (report_dir / "qwen_evidence_contract.json").write_text(
     json.dumps(
@@ -887,6 +1039,20 @@ artifact_dir = export_modernbert_hybrid_poc(
     encoder_reference_compile=None,
     config=router_config,
 )
+for manifest_path in (
+    report_dir / "experiment_manifest.json", artifact_dir / "manifest.json"
+):
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["scoring_contract"] = scoring_contract()
+    manifest["source_bundle_sha256"] = SOURCE_BUNDLE_SHA256
+    manifest["math_source_aggregate_comparison"] = "diagnostic_only"
+    manifest["historical_architecture_comparison_valid"] = False
+    if SOURCE_BUNDLE_SHA256:
+        # A pre-existing checkout can contain a different Git commit; the ZIP
+        # digest identifies the actual source used for this portable run.
+        manifest.setdefault("reproducibility", {})["repository_commit"] = None
+        manifest["reproducibility"]["source_bundle_sha256"] = SOURCE_BUNDLE_SHA256
+    manifest_path.write_text(json.dumps(manifest, indent=2), encoding="utf-8")
 overhead_comparison.to_csv(
     report_dir / "qwen_router_overhead_comparison.csv", index=False
 )
@@ -935,14 +1101,15 @@ notebook["cells"][28]["source"] = source_lines(
     """
 ## 15. Interpretation checklist and interactive showcase
 
-- Compare V6 validation ROC-AUC and unsafe average precision with V5, not only
-  training loss.
+- Confirm full-task counts and non-math checks passed, and inspect the displayed
+  math reference differences. These do not override local pinned labels. Inspect
+  corrected validation ROC-AUC and unsafe average precision alongside loss.
 - Inspect probability spans and within-dataset AUC.  A higher global AUC with
   nearly constant per-dataset probabilities is still a domain shortcut.
 - Require every original quality, harm, subgroup, calibration, threshold, and
   savings gate to pass.
 - Compare measured Qwen-router p95 with break-even overhead.  The frozen 4/20 ms
-  assumptions are for controlled policy comparison, not a production claim.
+  assumptions are frozen evaluation settings, not a production claim.
 - Remember that the Qwen router is a separate inference pass and this notebook
   assumes no KV-cache reuse if the 1.5B candidate is selected.
 - Treat seed 42 as development evidence.  Confirm on untouched seeds or task
@@ -978,6 +1145,8 @@ notebook["metadata"].pop("widgets", None)
 notebook["metadata"].pop("v5_contract", None)
 notebook["metadata"]["v6_contract"] = {
     "experiment": "Qwen2.5-1.5B causal final-token router ablation",
+    "scoring_version": "qwen-math-verify-v2",
+    "historical_architecture_comparison_valid": False,
     "router_repo": "Qwen/Qwen2.5-1.5B-Instruct",
     "pooling_strategy": "last_nonpadding_token",
     "max_input_tokens": 1024,

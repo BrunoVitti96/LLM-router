@@ -8,6 +8,88 @@ the active specification.
 In plain language, the README answers "How does the router work now?" This audit
 answers "What did earlier runs teach us, and why did the design change?"
 
+## 2026-09-11 — Correct MATH score provenance and version the Colab rerun
+
+### Plain-language finding
+
+A completed old V6 run reported 423/1,673 routes, 13 gains, no losses and a
+passing flag. All its routes were math tasks where the saved fallback labels
+were zero. Those numbers cannot establish mathematical-quality preservation:
+the original scorer required a specific final-answer sentence and rejected
+correct boxed answers. The old loader checked that labels were binary but did
+not check their scoring generation. A saved response calculating
+$1024-(1+10+45)=968$ and boxing 968 was scored zero against target 968.
+
+Hugging Face documented this issue and replaced the format-based grader with
+Math-Verify in February 2025. In the pinned 7B repository, math sample files
+retain September 2024 history while the result JSON was updated in February
+2025. Its `groups` values still include obsolete zeros; leaf `results` contain
+new math aggregates. This upstream mixture explains why matching a response's
+math answer disagreed with its stored per-example score.
+
+Sources: [official correction](https://huggingface.co/blog/math_verify_leaderboard),
+[original format explanation](https://huggingface.co/spaces/open-llm-leaderboard/open_llm_leaderboard/discussions/975),
+and [replacement implementation](https://github.com/huggingface/lm-evaluation-harness/blob/c2a084962aac2dd0f0813791c57c275b27573b35/lm_eval/tasks/leaderboard/math/utils.py).
+
+### Changes and technical contract
+
+- `math_scoring.py` applies the official parse-full-gold-solution, parse-response,
+  verify-gold-first procedure. Versions are fixed to Math-Verify 0.5.2,
+  latex2sympy2-extended 1.0.6, ANTLR 4.13.2 and SymPy 1.13.3. Dependencies are
+  checked before grading. A boxed 2/4 matches 1/2; 967 does not match 968.
+- Windows's upstream nested-process timeout is not spawn-picklable. An isolated,
+  reused worker owns symbolic work there, with a parent 30-second hard deadline;
+  deadlines/errors abort without inventing a score. Linux/Colab uses the original
+  per-operation signal timeouts. Missing/unparsed gold also aborts.
+- `qwen_evidence.py` retains `published_score` and supplies local `score`,
+  `score_source`, `scoring_version`, and parsed-answer evidence. MATH requires the
+  original `doc.solution` and a single recorded response. Other task metrics,
+  including strict IFEval correctness, remain unchanged.
+- Full-task counts/coverage/provenance and non-math means must reconcile before
+  the deterministic cap. Math source means are descriptive comparisons because
+  the upstream rescoring environment is unpinned and some 7B totals differ even
+  under the documented procedure. No labels are imputed or thresholds tuned to
+  force agreement: local pinned scores define v2. E.g. local 7B counting is
+  55/123 versus source 57/123; the difference remains visible in the audit.
+- Notebook 06 and its builder use `qwen25_v6_scoring_v2_*` run IDs and hash the
+  corrected scoring contract. They save full math evidence and audit results
+  before training, preserve original documents/responses, and remove invalid
+  old-V5 numerical comparisons. The loss, architecture, seeds/split algorithm,
+  five epochs, calibration method, latency assumptions and policy gates stay
+  fixed. Corrected $Q_m$ changes $y_m=1[Q_m\ge Q_f]$, class weights, and learned
+  outcomes; every training/calibration/evaluation stage must be rerun.
+- The old executed notebook is copied to
+  `results/qwen25_v6_qwen_router_ood_seed_42/executed_notebook_06.ipynb` before
+  rebuilding notebook 06 with no outputs. Historical result files are untouched.
+- `build_colab_bundle.py` packages corrected source and notebook with hashes.
+  Setup supports the uploaded source ZIP, checks archive paths before extracting,
+  propagates Git failures for the remote route, and rejects stale scoring code.
+  README, Colab instructions and investor-document status notices now distinguish
+  historical labels from the new untrained contract.
+
+### Validation and limits
+
+Regression tests cover correct/incorrect and equivalent math, gold failures,
+runtime/worker errors, provenance, missing/duplicate/capped source evidence,
+required non-math aggregate checks, explicitly diagnostic math differences,
+loader execution before capping, and safe source-bundle extraction. Local
+real-response validation uses public MATH-Hard solutions with each question
+cross-checked against its saved prompt. For the sampled 7B algebra responses,
+correctness changes from 0/300 to 236/300. This tests scoring only, not a trained
+router. The source aggregate covers 307 algebra examples and is not compared
+as if it described the capped 300.
+
+A Windows full-data check encountered a 30-second symbolic deadline and aborted
+as intended. The complete scoring audit passed on Ubuntu's native POSIX path for all
+3,951 saved math responses, matching Colab's timeout mechanism. All 20,145
+uncapped saved non-math rows passed exact reconciliation across 84 task/model
+groups. All 87 repository tests passed on Windows, and all 46 scoring/notebook
+tests passed on Linux. Modified files pass Ruff; repository-wide Ruff retains
+nine pre-existing issues in unrelated files. Source compilation and diff
+whitespace checks pass. Corrected GPU training, calibration, threshold selection
+and test performance still require the user's fresh run.
+No corrected savings or pass result is claimed.
+
 ## 2026-09-07 — Fix V6 mixed-dtype post-training inference
 
 In plain language, notebook 06 finished training but could not score prompts

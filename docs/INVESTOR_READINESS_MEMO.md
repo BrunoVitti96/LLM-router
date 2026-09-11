@@ -1,5 +1,15 @@
 # Investor presentation — safety-first LLM routing
 
+> **Current status — 2026-09-11:** The old Qwen detail rows use obsolete MATH
+> format scores. Notebook 06 now regrades recorded math responses under the
+> pinned `qwen-math-verify-v2` contract. A boxed 968 against gold 968 changes
+> from old score 0 to correctness 1. Earlier V4/V5/V6 performance claims below
+> are historical and must not be presented as corrected results. A fresh Colab
+> training/evaluation is required; see [README](../README.md) and the
+> [current runbook](COLAB_RUNBOOK.md). Funding milestones should validate these
+> corrected labels and customer serving economics before claiming savings.
+
+
 ## 1 — The opportunity
 
 Many prompts do not need the largest model. This project uses a small

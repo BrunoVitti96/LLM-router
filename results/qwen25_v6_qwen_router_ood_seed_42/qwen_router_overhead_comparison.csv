@@ -1,0 +1,5 @@
+source,overhead_ms,break_even_ms,below_break_even
+frozen nominal assumption,4.0,652.9544191405996,True
+frozen conservative assumption,20.0,652.9544191405996,True
+measured Qwen-router p50,130.74457199945755,652.9544191405996,True
+measured Qwen-router p95,226.92514249720261,652.9544191405996,True

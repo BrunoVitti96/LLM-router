@@ -1,6 +1,6 @@
 # Calibrated safety routers for three Qwen capacity tiers
 
-The current V6 architecture diagnostic loads reproducible, published per-example
+The current V6 scoring-v2 diagnostic loads reproducible, published per-example
 quality evidence for three separated Qwen2.5 tiers—1.54B, 3.09B, and 7.61B
 parameters—then trains `Qwen/Qwen2.5-1.5B-Instruct` as a causal, final-token
 safety router. Qwen's fixed, one-token `<|endoftext|>` sentinel follows the prompt, and a
@@ -15,7 +15,9 @@ latency comes from model size, generation architecture, precision, prompt size,
 and explicit hardware assumptions. V6 loads Qwen2.5-1.5B only as the router and
 does not generate candidate answers; candidate generation latency remains
 analytical. Quality comes from pinned Hugging Face Open LLM Leaderboard detail
-datasets; published runtime is neither a routing target nor used by the selector.
+datasets. MATH responses are regraded with the pinned Math-Verify procedure;
+other tasks retain their source binary metric. Published runtime is neither
+a routing target nor used by the selector.
 
 The project is an analytical-latency feasibility experiment, not a claim about
 measured production latency.
@@ -34,8 +36,9 @@ Technically, the learned router predicts two separate fallback-relative safety
 probabilities, one for each non-fallback Qwen tier. The selector combines those
 probabilities with analytical latency estimates. V6 trains one 1,024-token
 causal Qwen router, restores its best of five validation checkpoints, freezes a
-stable validation threshold region, and evaluates the same seed-42 partition for
-a direct V5 comparison. The test is successful only if conservative quality,
+stable validation threshold region, and evaluates the same seed-42 partition
+as development evidence under a new scoring contract. Old V5/V6 scores are not
+valid architecture-comparison baselines. The test is successful only if conservative quality,
 subgroup, harm, calibration, threshold-stability, and latency-overhead gates all
 pass.
 
@@ -62,6 +65,68 @@ training beat rank-4 and rank-8 hybrid training on calibration, safe-opportunity
 recall, and conservative analytical savings. V4 treats that result as exploratory
 model-selection evidence and starts a new versioned safety-only study rather than
 silently changing the remaining v3 runs after a sealed test was observed.
+
+## Current scoring correction: rerun notebook 06 before interpreting results
+
+**The completed old V6 run used obsolete MATH labels. Its passing flag and
+zero-loss claim are historical, not validated mathematical-quality results.**
+Notebook 06 now uses `RUN_ID = "qwen25_v6_scoring_v2_ood_seed_42"` and the
+`qwen-math-verify-v2` evidence contract. The corrected router has not yet been
+trained/evaluated; a full fresh Colab run is required.
+
+In plain language, the original grader required a particular final-answer
+sentence and marked many correct boxed answers wrong. Hugging Face later
+updated the aggregate math scores, while the pinned per-answer files retained
+the older format-based scores. The old loader accepted those binary zeros
+without checking their grading meaning. A response deriving and boxing **968**
+against gold **968** therefore incorrectly supplied a zero quality label for
+this project's intended mathematical-correctness target.
+
+The new scorer follows the [official Hugging Face replacement procedure](https://github.com/huggingface/lm-evaluation-harness/blob/c2a084962aac2dd0f0813791c57c275b27573b35/lm_eval/tasks/leaderboard/math/utils.py):
+
+1. Parse the original `doc.solution` using `LatexExtractionConfig()`.
+2. Parse the recorded candidate response using Math-Verify's default extractors.
+3. Compare gold and candidate using `verify(gold, prediction)`.
+
+The grading stack is frozen to Math-Verify 0.5.2,
+latex2sympy2-extended 1.0.6, ANTLR runtime 4.13.2, and SymPy 1.13.3.
+Missing/unparseable gold or incompatible dependencies stop the run. Incorrect
+or unextractable predictions score zero. A boxed `2/4` can match gold `1/2` by
+mathematical equivalence; a boxed `967` does not match `968`. No candidate
+answers are generated, and no labels are inferred from aggregate totals.
+Non-math metrics, including IFEval's strict prompt-level accuracy, stay unchanged.
+
+Technically, quality becomes the versioned per-response score
+$Q_m=\operatorname{verify}(\operatorname{parse}(g),\operatorname{parse}(a_m))$
+on MATH; the safety target remains $y_m=\mathbf{1}[Q_m\ge Q_f]$.
+If corrected fallback quality changes from 0 to 1 while the smaller model stays
+at 0, its safety label changes from 1 to 0. Loss form, LoRA rank, five epochs,
+calibration, split algorithm, threshold grid, latency assumptions, and policy
+gates remain fixed, but labels, class weights, and trained results must be rebuilt.
+
+Before alignment/sampling, the loader checks every full-task count, task/model
+coverage, score provenance, binary values, and exact non-math aggregate means.
+The updated source math aggregates lack a pinned rescoring environment and do
+not all reproduce: local scoring of the saved 7B counting responses gives
+**55/123**, while the source leaf aggregate reports **57/123**. Those source
+math differences are **diagnostic**, displayed and exported explicitly; v2 uses
+its locally pinned scores. The old `groups` metadata can still contain obsolete
+math scores and is never used as the corrected reference. This is a new local
+scoring contract, not a claim to reproduce every leaderboard total.
+
+The local audit of saved algebra responses changes the 7B count from 0/300 to
+236/300. This verifies grading behavior, not a router performance improvement.
+The source's algebra total covers 307 examples, so compare full means before the
+300-example cap, not sampled means. The report preserves `published_score`,
+corrected `score`, scorer version/source, parsed answers, original documents,
+and responses. All pre-cap math rows are exported separately. See
+[`audits.md`](audits.md) for source history and validation evidence.
+
+All old Qwen runs using these detail labels, including the V4/V5 sections below,
+are historical under the obsolete scoring contract. Their reported statistics
+must not be reused as corrected performance claims. The executed old V6 notebook
+is preserved in `results/qwen25_v6_qwen_router_ood_seed_42/executed_notebook_06.ipynb`;
+notebook 06 is rebuilt without outputs for the new run.
 
 ## Historical V4 evidence: notebook 04 exposed an OOD generalization failure
 
@@ -652,73 +717,40 @@ representation test from being mistaken for a continuation of either contract.
 
 [Open notebook 06 in Google Colab](https://colab.research.google.com/github/BrunoVitti96/LLM-router/blob/poc/notebooks/06_train_qwen15_last_token_router_ood_v6.ipynb)
 
-Notebook 06 and its companion source must exist together on the `poc` branch.
-The setup cell verifies both `qwen_evidence.py` and
-`models/qwen_last_token_router.py` before importing. This prevents a notebook
-that expects final-token pooling from silently running older masked-mean code.
+For a rerun without waiting for a Git push, build the portable source bundle:
 
-1. Select **Runtime → Change runtime type → GPU**.
-   A Tesla T4 is the minimum practical target; an A100 is preferred.
-2. Leave `RUN_ID = "qwen25_v6_qwen_router_ood_seed_42"` for the direct V5
-   development comparison and execute every cell from top to bottom. Accept
-   access to the three auto-gated Open LLM
-   Leaderboard detail datasets and add a read token named `HF_TOKEN` to Colab
-   secrets. In Colab, click the key icon in the left sidebar, create the secret
-   with that exact name, paste the token as its value, and enable notebook
-   access. A secret that exists but is not enabled is still unavailable. If no
-   usable secret exists, the notebook falls back to a hidden prompt: paste the
-   token once for the current Colab session. It is not printed or saved in the
-   notebook. A `401 GatedRepoError` after token entry means either the account
-   has not accepted that dataset's conditions or the token lacks read access to
-   gated repositories; accept all three pages using the same account and use a
-   read-capable token.
-3. The notebook downloads the pinned JSONL answer evidence and the
-   Qwen2.5-1.5B weights used only as the router. It never generates candidate
-   answers; candidate latency remains analytical.
-4. Confirm the displayed correctness audit has only binary outcomes and one row
-   for every task/model/metric combination. Any incomplete or ambiguous panel
-   fails before router training.
-5. Confirm micro-batch size one and four-step gradient accumulation produce an
-   effective batch size of four. Let all five epochs complete and confirm the
-   minimum-validation-loss checkpoint is restored.
-6. Inspect validation ROC-AUC, unsafe average precision, probability spans, and
-   within-dataset ROC-AUC. Improvement should occur inside datasets, not only
-   through recognizing their templates.
-7. Run the final cell and use its Gradio share link to demonstrate safety
-   probability, fallback use, analytical candidate latency, and estimated savings.
-8. Download the generated `qwen25_v6_qwen_router_ood_seed_42` ZIP. Compare it
-   with the embedded V5 reference, then use untouched seeds or new task families
-   for confirmation.
+```powershell
+python scripts/build_colab_bundle.py
+```
 
-The notebook downloads three pinned Open LLM Leaderboard detail repositories,
-aligns their 37 non-overlapping task files, deterministically keeps at most 300
-prompts per task, proves completion-length leakage is absent, audits prompt-content
-groups, runs validation-only sensitivity scenarios, trains and calibrates
-the final-token Qwen router for all five epochs, and restores its best
-validation-safety checkpoint. It freezes the threshold with the same validation
-margin and stability rule, evaluates the development test, and exports a
-reconstructable artifact plus scored evidence. It then measures only the Qwen
-router forward pass and launches a demo whose candidate latency remains
-analytical. The notebook builder emits an output-free notebook; retained notebook
-06 output currently records a failed execution, not a completed V6 evaluation.
-All five epochs completed (best validation safety loss 0.2461 at epoch 3), then
-post-training prediction failed because FP16 encoder states met FP32 head weights.
-The router now casts the pooled state to each head's weight dtype before its
-linear projection, including inference without autocast. For example, FP16
-`[4, 4]` is promoted to FP32 `[4, 4]`; unit weights and zero bias still produce
-logit `8`. This fixes the numeric-type mismatch without changing the safety
-target or policy gates. FP16, BF16, and FP32 encoder outputs have regression
-coverage for both heads. Notebook tests permit retained execution evidence,
-while the builder continues to emit clean notebooks.
+1. Open the updated notebook 06 in Colab (upload the local `.ipynb`).
+2. Select a fresh GPU runtime; an A100 is preferred and a T4 is supported.
+3. Upload `dist/colab/llm_router_colab_scoring_v2.zip` through the Files sidebar
+   so it appears at `/content/llm_router_colab_scoring_v2.zip`.
+4. Keep `RUN_ID = "qwen25_v6_scoring_v2_ood_seed_42"`. Enable the existing
+   `HF_TOKEN` Colab secret with read access and accept all three gated detail
+   datasets using that account. A hidden token prompt remains available.
+5. Run every cell from the beginning. Setup validates the ZIP paths, installs
+   pinned dependencies, and verifies the scoring version before grading. Without
+   a ZIP, it fetches `poc` using checked Git commands; the corrected Python
+   files must already be on that branch. Updating only the notebook is insufficient.
+6. Inspect the full-task audit before training: count/non-math checks must pass;
+   math source-reference differences are reported separately. Original and
+   corrected scores are saved before the five-epoch GPU training begins.
+7. Let all five epochs finish and verify the minimum-validation-loss checkpoint
+   is restored. Calibration and thresholds must be recomputed on corrected labels.
+8. Download the new run ZIP and inspect the current-run dashboard, quality/harm
+   bounds, within-dataset discrimination, and measured router overhead. There is
+   no numerical V5 comparison because the scoring contracts differ.
 
-To rerun in Colab, first sync the corrected
-`src/llm_router/models/qwen_last_token_router.py` to the `poc` branch fetched by
-setup, then restart the runtime and run notebook 06 from the first cell. Updating
-only the notebook while fetching old remote source will reproduce the error.
-The retained failed-run outputs are historical; calibration, routing quality,
-and measured V6 overhead still require a successful rerun.
-Embedded notebook output is not a substitute for the reconstructable ZIP, which
-remains the authoritative run record and should be preserved separately.
+Restart the runtime before rerunning after a dependency/source change. Candidate
+answers remain the recorded published responses; only their MATH grades are
+recomputed. Candidate latency remains analytical. The 4 ms and 20 ms settings
+are frozen evaluation assumptions, not measured Qwen-router speed.
+
+The prior mixed-dtype inference fix remains: each classifier receives the
+sentinel state cast to its own weight dtype. FP16 `[4, 4]` with FP32 unit weights
+still gives logit `8`. Current scoring changes do not alter that model path.
 
 The current investor-facing decision memo and honest limitations are in
 [`docs/INVESTOR_READINESS_MEMO.md`](docs/INVESTOR_READINESS_MEMO.md). The shorter
@@ -741,7 +773,12 @@ not a router-training failure.
 
 The report directory contains:
 
-- `qwen_candidate_records.parquet`: sampled, aligned, published candidate outcomes;
+- `qwen_candidate_records.parquet`: sampled, aligned outcomes with original
+  and corrected scores and grading provenance;
+- `qwen_math_rescored_records.parquet`: every pre-cap math response, raw gold,
+  original score, local score, and extraction evidence;
+- `qwen_scoring_reconciliation.csv`: full-task counts and required non-math
+  checks, plus explicitly diagnostic math source-aggregate differences;
 - `qwen_quality_audit.csv`: correct, incorrect, total, and quality counts by
   task, candidate, and published binary metric;
 - `published_evaluation_metadata.json`: the complete pinned leaderboard run metadata;
@@ -776,8 +813,8 @@ The report directory contains:
   prefix-with-last strategy, effective batch, checkpoint, and result status;
 - `within_dataset_discrimination.csv`: candidate safety prevalence, probability
   span, and within-dataset ROC-AUC where both labels exist;
-- `v5_v6_validation_comparison.csv` and `v5_v6_test_comparison.csv`: the frozen
-  descriptive V5 seed-42 reference beside the V6 result;
+- `v6_scoring_v2_validation_summary.csv` and `v6_scoring_v2_test_summary.csv`:
+  current corrected-scoring results, without incompatible V5 comparisons;
 - `validation_sensitivity.csv`: validation-only oracle headroom across analytical
   hardware and output-length assumptions;
 - `test_router_overhead_sensitivity.csv`: the frozen test policy under several
@@ -909,6 +946,8 @@ scripts/
 
 src/llm_router/
 ├── analytical_latency.py       # measurement-free latency equations
+├── math_scoring.py             # pinned mathematical-equivalence grading
+├── qwen_evidence.py            # versioned labels and source reconciliation
 ├── input_representation.py     # prefix and head-tail router tokenization
 ├── experiment_plan.py          # historical CLI/notebook-02 schema-v5 presets
 ├── router_overhead.py          # learned-router target-hardware timing

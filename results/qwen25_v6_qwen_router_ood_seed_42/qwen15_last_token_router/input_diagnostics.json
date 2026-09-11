@@ -1,0 +1,11 @@
+{
+  "examples": 8632,
+  "max_input_tokens": 1024,
+  "truncation_strategy": "prefix_with_last",
+  "truncated_examples": 773,
+  "truncation_rate": 0.08955050973123262,
+  "router_tokens_p50": 562.0,
+  "router_tokens_p95": 1111.0,
+  "router_tokens_max": 2822,
+  "router_architecture": "Qwen2.5-1.5B final-token router"
+}
